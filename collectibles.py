@@ -20,14 +20,16 @@ from panda3d.core import (
     Material
 )
 
+from scene import Scene
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Funções de geometria procedural
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _make_sphere_geom(radius: float = 0.5, stacks: int = 12, slices: int = 16) -> Geom:
+def _make_sphere_geom(radius: float = 0.5, stacks: int = 18, slices: int = 24) -> Geom:
     """
-    Gera uma esfera UV triangulada proceduralmente.
+    Gera uma esfera UV triangulada proceduralmente (alta resolução).
 
     Parâmetros
     ----------
@@ -62,6 +64,86 @@ def _make_sphere_geom(radius: float = 0.5, stacks: int = 12, slices: int = 16) -
             b = a + 1
             c = a + (slices + 1)
             d = c + 1
+            tris.addVertices(a, c, b)
+            tris.addVertices(b, c, d)
+
+    geom = Geom(vdata)
+    geom.addPrimitive(tris)
+    return geom
+
+
+def _make_octahedron_geom(size: float = 0.55) -> Geom:
+    """
+    Gera um octaedro regular com normais por face (8 triângulos).
+    Formato diamante — visualmente distinto da esfera e do cubo.
+    """
+    r = size
+    verts = [
+        ( 0,  0,  r),  # topo    0
+        ( 0,  0, -r),  # base    1
+        ( r,  0,  0),  # direita 2
+        (-r,  0,  0),  # esq     3
+        ( 0,  r,  0),  # frente  4
+        ( 0, -r,  0),  # trás    5
+    ]
+    faces = [
+        (0, 2, 4), (0, 4, 3), (0, 3, 5), (0, 5, 2),
+        (1, 4, 2), (1, 3, 4), (1, 5, 3), (1, 2, 5),
+    ]
+
+    fmt   = GeomVertexFormat.getV3n3()
+    vdata = GeomVertexData("octahedron", fmt, Geom.UHStatic)
+    vdata.setNumRows(len(faces) * 3)
+    vertex = GeomVertexWriter(vdata, "vertex")
+    normal = GeomVertexWriter(vdata, "normal")
+    tris   = GeomTriangles(Geom.UHStatic)
+
+    for fi, (a, b, c) in enumerate(faces):
+        va, vb, vc = [Vec3(*verts[i]) for i in (a, b, c)]
+        n = (vb - va).cross(vc - va)
+        n.normalize()
+        base = fi * 3
+        for v in (va, vb, vc):
+            vertex.addData3(v)
+            normal.addData3(n)
+        tris.addVertices(base, base + 1, base + 2)
+
+    geom = Geom(vdata)
+    geom.addPrimitive(tris)
+    return geom
+
+
+def _make_ring_geom(radius: float, tube_r: float, slices: int = 24, rings: int = 8) -> Geom:
+    """Toro fino (anel) — usado como aura decorativa ao redor dos coletáveis."""
+    fmt   = GeomVertexFormat.getV3n3()
+    total = slices * rings
+    vdata = GeomVertexData("ring", fmt, Geom.UHStatic)
+    vdata.setNumRows(total)
+    vertex = GeomVertexWriter(vdata, "vertex")
+    normal = GeomVertexWriter(vdata, "normal")
+    tris   = GeomTriangles(Geom.UHStatic)
+
+    for i in range(slices):
+        phi = 2 * math.pi * i / slices
+        cx  = radius * math.cos(phi)
+        cy  = radius * math.sin(phi)
+        for j in range(rings):
+            theta = 2 * math.pi * j / rings
+            nx = math.cos(phi) * math.cos(theta)
+            ny = math.sin(phi) * math.cos(theta)
+            nz = math.sin(theta)
+            x  = cx + tube_r * math.cos(phi) * math.cos(theta)
+            y  = cy + tube_r * math.sin(phi) * math.cos(theta)
+            z  = tube_r * math.sin(theta)
+            vertex.addData3(x, y, z)
+            normal.addData3(nx, ny, nz)
+
+    for i in range(slices):
+        for j in range(rings):
+            a = i * rings + j
+            b = i * rings + (j + 1) % rings
+            c = ((i + 1) % slices) * rings + j
+            d = ((i + 1) % slices) * rings + (j + 1) % rings
             tris.addVertices(a, c, b)
             tris.addVertices(b, c, d)
 
@@ -122,7 +204,7 @@ COLORS = [
     Vec4(0.8, 0.3,  1.0, 1),   # roxo
 ]
 
-SHAPES = ["sphere", "cube"]
+SHAPES = ["sphere", "cube", "octahedron"]
 
 
 class Collectible:
@@ -155,9 +237,11 @@ class Collectible:
 
         # ── Geometria ────────────────────────────────────────────────────
         if shape == "sphere":
-            geom = _make_sphere_geom(radius=0.45)
+            geom = _make_sphere_geom(radius=0.48)
+        elif shape == "octahedron":
+            geom = _make_octahedron_geom(size=0.60)
         else:
-            geom = _make_cube_geom(size=0.7)
+            geom = _make_cube_geom(size=0.72)
 
         geom_node = GeomNode(f"collectible_geom_{index}")
         geom_node.addGeom(geom)
@@ -167,17 +251,30 @@ class Collectible:
         col = color if color else random.choice(COLORS)
         mat = Material()
         mat.setDiffuse(col)
-        mat.setAmbient(Vec4(col[0]*0.4, col[1]*0.4, col[2]*0.4, 1))
-        mat.setSpecular(Vec4(0.8, 0.8, 0.8, 1))
-        mat.setShininess(60)
+        mat.setAmbient(Vec4(col[0]*0.5, col[1]*0.5, col[2]*0.5, 1))
+        mat.setSpecular(Vec4(1.0, 1.0, 1.0, 1))
+        mat.setShininess(110)
         self.geom_np.setMaterial(mat, 1)
+
+        # ── Anel decorativo (aura) ────────────────────────────────────────
+        ring_geom = _make_ring_geom(radius=0.70, tube_r=0.07)
+        ring_node = GeomNode(f"collectible_ring_{index}")
+        ring_node.addGeom(ring_geom)
+        self.ring_np = self.root.attachNewNode(ring_node)
+        ring_mat = Material()
+        ring_mat.setDiffuse(Vec4(col[0]*0.8, col[1]*0.8, col[2]*0.8, 1))
+        ring_mat.setAmbient(Vec4(col[0]*0.6, col[1]*0.6, col[2]*0.6, 1))
+        ring_mat.setSpecular(Vec4(1.0, 1.0, 1.0, 1))
+        ring_mat.setShininess(160)
+        self.ring_np.setMaterial(ring_mat, 1)
+        self.ring_np.setH(random.uniform(0, 360))   # orientação aleatória do anel
 
         # ── Colisão ──────────────────────────────────────────────────────
         # Todos usam o mesmo nome para o evento casar no accept()
         col_node = CollisionNode("collectible_sphere")
         col_node.addSolid(CollisionSphere(0, 0, 0, 0.8))
         col_node.setFromCollideMask(BitMask32.allOff())
-        col_node.setIntoCollideMask(BitMask32.bit(1))
+        col_node.setIntoCollideMask(Scene.COLLECTIBLE_COLLIDE_MASK)
         self.col_np = self.root.attachNewNode(col_node)
         # Tag com índice único — lido via getTag() no evento de colisão
         self.col_np.setTag('cid', str(index))
@@ -191,6 +288,10 @@ class Collectible:
         # Rotação contínua no eixo Z
         self._rot_angle = (self._rot_angle + self.ROT_SPEED * dt) % 360
         self.geom_np.setH(self._rot_angle)
+
+        # Anel girando na direção oposta e em eixo diferente
+        self.ring_np.setP(self._rot_angle * 0.7)
+        self.ring_np.setR(self._rot_angle * 0.4)
 
         # Bob senoidal
         bob = math.sin(elapsed * self.BOB_SPEED + self._bob_phase)

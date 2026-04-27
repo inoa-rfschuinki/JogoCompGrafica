@@ -12,9 +12,10 @@ Controles:
 from direct.showbase.ShowBase import ShowBase
 from direct.task import Task
 from panda3d.core import (
-    AmbientLight, DirectionalLight,
-    CollisionTraverser, CollisionHandlerEvent,
+    AmbientLight, DirectionalLight, PointLight, Spotlight,
+    CollisionTraverser, CollisionHandlerEvent, CollisionHandlerPusher,
     WindowProperties, AntialiasAttrib,
+    Fog,
     Vec4, Vec3
 )
 from panda3d.core import loadPrcFileData
@@ -58,46 +59,64 @@ class Game(ShowBase):
         self._menu.show()
 
     def _setup_lighting(self):
+        # Luz ambiente suave com tom azulado (céu difuso)
         ambient = AmbientLight("ambient_light")
-        ambient.setColor(Vec4(0.35, 0.35, 0.40, 1))
+        ambient.setColor(Vec4(0.28, 0.32, 0.40, 1))
         self.render.setLight(self.render.attachNewNode(ambient))
 
+        # Sol principal — ângulo rasante para sombras longas
         sun = DirectionalLight("sun_light")
-        sun.setColor(Vec4(0.9, 0.85, 0.75, 1))
-        sun.setDirection(Vec3(-1, -2, -3))
+        sun.setColor(Vec4(1.0, 0.92, 0.75, 1))
+        sun.setDirection(Vec3(-1.5, -2.5, -3))
         self.render.setLight(self.render.attachNewNode(sun))
 
+        # Contraluz céu (bounce light azul vindo de cima)
+        sky_fill = DirectionalLight("sky_fill")
+        sky_fill.setColor(Vec4(0.20, 0.30, 0.55, 1))
+        sky_fill.setDirection(Vec3(0.5, 0.5, -1))
+        self.render.setLight(self.render.attachNewNode(sky_fill))
+
+        # Preenchimento do lado oposto ao sol (evita preto absoluto)
         fill = DirectionalLight("fill_light")
-        fill.setColor(Vec4(0.15, 0.20, 0.30, 1))
-        fill.setDirection(Vec3(1, 1, -1))
+        fill.setColor(Vec4(0.18, 0.22, 0.28, 1))
+        fill.setDirection(Vec3(1.5, 2.5, -1))
         self.render.setLight(self.render.attachNewNode(fill))
 
     def _start_game(self):
         self._menu.hide()
         self._cleanup_game()
 
-        self.setBackgroundColor(0.40, 0.65, 0.90, 1)
+        self.setBackgroundColor(0.52, 0.73, 0.95, 1)
 
         self.cTrav = CollisionTraverser("main_traverser")
         self.collision_handler = CollisionHandlerEvent()
         self.collision_handler.addInPattern("%fn-into-%in")
 
+        self.pusher = CollisionHandlerPusher()
+        self.pusher.setHorizontal(True)
+
+        # Névoa exponencial para profundidade atmosférica
+        fog = Fog("scene_fog")
+        fog.setColor(0.62, 0.80, 0.95)
+        fog.setExpDensity(0.007)
+        self.render.setFog(fog)
+
         self.scene = Scene(self.render, self.loader)
-        self.player = Player(self, self.camera, self.render)
+        self.player = Player(self, self.camera, self.render, self.pusher)
         self.collectible_manager = CollectibleManager(
             self.render, self.loader, self.cTrav, self.collision_handler
         )
         self.hud = HUD(self)
 
         self._game_running = True
-        self.accept("player_sphere-into-collectible_sphere", self._on_collect)
+        self.accept("player_collect_sphere-into-collectible_sphere", self._on_collect)
         self._capture_mouse()
         self.taskMgr.add(self._update, "update_task")
 
     def _cleanup_game(self):
         self._game_running = False
         self.taskMgr.remove("update_task")
-        self.ignore("player_sphere-into-collectible_sphere")
+        self.ignore("player_collect_sphere-into-collectible_sphere")
 
         if self.hud:
             self.hud.destroy()
@@ -111,6 +130,7 @@ class Game(ShowBase):
         if self.collectible_manager:
             self.collectible_manager.destroy()
             self.collectible_manager = None
+        self.render.clearFog()
 
     def _go_to_menu(self):
         score = self.hud.score        if self.hud else None
@@ -124,6 +144,7 @@ class Game(ShowBase):
         if not self._game_running:
             return Task.done
         dt = globalClock.getDt()
+        self.cTrav.traverse(self.render)
         self.player.update(dt)
         self.collectible_manager.update(dt)
         self.hud.update(dt)
@@ -141,7 +162,7 @@ class Game(ShowBase):
     def _trigger_victory(self):
         self._game_running = False
         self.taskMgr.remove("update_task")
-        self.ignore("player_sphere-into-collectible_sphere")
+        self.ignore("player_collect_sphere-into-collectible_sphere")
         self._free_mouse()
         self.hud.show_victory(
             final_score=self.hud.score,
