@@ -20,6 +20,8 @@ from panda3d.core import (
     Material
 )
 
+from scene import Scene
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Funções de geometria procedural
@@ -177,7 +179,7 @@ class Collectible:
         col_node = CollisionNode("collectible_sphere")
         col_node.addSolid(CollisionSphere(0, 0, 0, 0.8))
         col_node.setFromCollideMask(BitMask32.allOff())
-        col_node.setIntoCollideMask(BitMask32.bit(1))
+        col_node.setIntoCollideMask(Scene.COLLECTIBLE_COLLIDE_MASK)
         self.col_np = self.root.attachNewNode(col_node)
         # Tag com índice único — lido via getTag() no evento de colisão
         self.col_np.setTag('cid', str(index))

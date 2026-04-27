@@ -14,7 +14,8 @@ from panda3d.core import (
     GeomVertexFormat, GeomVertexData, GeomVertexWriter,
     Geom, GeomTriangles, GeomNode,
     NodePath, Vec4, Vec3, Material,
-    AmbientLight
+    AmbientLight,
+    CollisionNode, CollisionBox, Point3, BitMask32,
 )
 
 
@@ -123,6 +124,8 @@ class Scene:
 
     MAP_SIZE  = 100   # lado do chão (centrado na origem)
     WALL_H    = 5     # altura das paredes de limite
+    TREE_COLLIDE_MASK = BitMask32.bit(1)
+    COLLECTIBLE_COLLIDE_MASK = BitMask32.bit(2)
 
     def __init__(self, render: NodePath, loader):
         self.render = render
@@ -207,6 +210,15 @@ class Scene:
         canopy_np.setPos(x, y, 4.1)
         _set_material(canopy_np, Vec4(0.15, 0.6, 0.15, 1), ambient_factor=0.35,
                       shininess=5)
+        
+        # Colisor da árvore (tronco + copa)
+        col = CollisionNode(f"tree_col_{idx}")
+        # Caixa centrada no meio da árvore, cobrindo tronco e copa
+        col.addSolid(CollisionBox(Point3(0, 0, 2.6), 1.2, 1.2, 2.6))
+        col.setFromCollideMask(BitMask32.allOff())
+        col.setIntoCollideMask(self.TREE_COLLIDE_MASK)
+        col_np = self.root.attachNewNode(col)
+        col_np.setPos(x, y, 0)
 
     def _build_platform(self, x: float, y: float, z: float, idx: int):
         """Plataforma baixa como referência visual no mapa."""

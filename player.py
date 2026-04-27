@@ -13,6 +13,8 @@ from panda3d.core import (
     Vec3, BitMask32
 )
 
+from scene import Scene
+
 
 class Player:
     """
@@ -31,7 +33,7 @@ class Player:
     CAMERA_HEIGHT    = 1.7   # altura dos olhos em relação ao chão
     PITCH_LIMIT      = 80    # limite de inclinação vertical (graus)
 
-    def __init__(self, base, camera, render):
+    def __init__(self, base, camera, render, pusher):
         self.base   = base
         self.camera = camera
         self.render = render
@@ -63,13 +65,24 @@ class Player:
         self.camera.setP(self.pitch)
 
         # ── Colisão ──────────────────────────────────────────────────────
-        col_node = CollisionNode("player_sphere")
-        col_node.addSolid(CollisionSphere(0, 0, 0, self.COLLISION_RADIUS))
-        col_node.setFromCollideMask(BitMask32.bit(1))
-        col_node.setIntoCollideMask(BitMask32.allOff())
-        self.col_np = self.pivot.attachNewNode(col_node)
+        # Colisor para árvores (pusher)
+        tree_col = CollisionNode("player_tree_sphere")
+        tree_col.addSolid(CollisionSphere(0, 0, 0, self.COLLISION_RADIUS))
+        tree_col.setFromCollideMask(Scene.TREE_COLLIDE_MASK)
+        tree_col.setIntoCollideMask(BitMask32.allOff())
+        self.tree_col_np = self.pivot.attachNewNode(tree_col)
 
-        base.cTrav.addCollider(self.col_np, base.collision_handler)
+        # Colisor para coletáveis (eventos)
+        collect_col = CollisionNode("player_collect_sphere")
+        collect_col.addSolid(CollisionSphere(0, 0, 0, self.COLLISION_RADIUS))
+        collect_col.setFromCollideMask(Scene.COLLECTIBLE_COLLIDE_MASK)
+        collect_col.setIntoCollideMask(BitMask32.allOff())
+        self.collect_col_np = self.pivot.attachNewNode(collect_col)
+
+        base.cTrav.addCollider(self.tree_col_np, pusher)
+        pusher.addCollider(self.tree_col_np, self.pivot)
+
+        base.cTrav.addCollider(self.collect_col_np, base.collision_handler)
 
         # ── Teclas pressionadas ──────────────────────────────────────────
         self._keys = {
