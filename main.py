@@ -13,7 +13,7 @@ from direct.showbase.ShowBase import ShowBase
 from direct.task import Task
 from panda3d.core import (
     AmbientLight, DirectionalLight,
-    CollisionTraverser, CollisionHandlerEvent,
+    CollisionTraverser, CollisionHandlerEvent, CollisionHandlerPusher,
     WindowProperties, AntialiasAttrib,
     Vec4, Vec3
 )
@@ -82,22 +82,25 @@ class Game(ShowBase):
         self.collision_handler = CollisionHandlerEvent()
         self.collision_handler.addInPattern("%fn-into-%in")
 
+        self.pusher = CollisionHandlerPusher()
+        self.pusher.setHorizontal(True)
+
         self.scene = Scene(self.render, self.loader)
-        self.player = Player(self, self.camera, self.render)
+        self.player = Player(self, self.camera, self.render, self.pusher)
         self.collectible_manager = CollectibleManager(
             self.render, self.loader, self.cTrav, self.collision_handler
         )
         self.hud = HUD(self)
 
         self._game_running = True
-        self.accept("player_sphere-into-collectible_sphere", self._on_collect)
+        self.accept("player_collect_sphere-into-collectible_sphere", self._on_collect)
         self._capture_mouse()
         self.taskMgr.add(self._update, "update_task")
 
     def _cleanup_game(self):
         self._game_running = False
         self.taskMgr.remove("update_task")
-        self.ignore("player_sphere-into-collectible_sphere")
+        self.ignore("player_collect_sphere-into-collectible_sphere")
 
         if self.hud:
             self.hud.destroy()
@@ -124,6 +127,7 @@ class Game(ShowBase):
         if not self._game_running:
             return Task.done
         dt = globalClock.getDt()
+        self.cTrav.traverse(self.render)
         self.player.update(dt)
         self.collectible_manager.update(dt)
         self.hud.update(dt)
@@ -141,7 +145,7 @@ class Game(ShowBase):
     def _trigger_victory(self):
         self._game_running = False
         self.taskMgr.remove("update_task")
-        self.ignore("player_sphere-into-collectible_sphere")
+        self.ignore("player_collect_sphere-into-collectible_sphere")
         self._free_mouse()
         self.hud.show_victory(
             final_score=self.hud.score,
