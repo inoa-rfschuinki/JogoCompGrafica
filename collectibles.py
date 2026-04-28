@@ -320,12 +320,10 @@ class CollectibleManager:
     Cria, armazena e atualiza todos os coletáveis do nível.
     """
 
-    # Posições fixas espalhadas pelo mapa (x, y) — 15 itens
+    # Posições fixas espalhadas pelo mapa (x, y) — 5 itens
     SPAWN_POSITIONS = [
-        ( 10,  10), (-10,  10), ( 10, -10), (-10, -10),
-        ( 20,   0), (-20,   0), (  0,  20), (  0, -20),
-        ( 15,  25), (-15,  25), ( 15, -25), (-15, -25),
-        ( 30,  15), (-30, -15), (  5,  35),
+        ( 10,  10), (-10, -10),
+        ( 20,   0), (  0,  20), (-15,  25),
     ]
 
     def __init__(self, render, loader, cTrav, collision_handler):

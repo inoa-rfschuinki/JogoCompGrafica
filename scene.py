@@ -227,8 +227,9 @@ class Scene:
 
     MAP_SIZE  = 100   # lado do chão (centrado na origem)
     WALL_H    = 12    # altura das paredes de limite
-    TREE_COLLIDE_MASK = BitMask32.bit(1)
+    TREE_COLLIDE_MASK        = BitMask32.bit(1)
     COLLECTIBLE_COLLIDE_MASK = BitMask32.bit(2)
+    OBSTACLE_COLLIDE_MASK    = BitMask32.bit(3)
 
     def __init__(self, render: NodePath, loader):
         self.render = render

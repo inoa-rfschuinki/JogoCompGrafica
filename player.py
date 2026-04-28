@@ -77,9 +77,19 @@ class Player:
         collect_col.setIntoCollideMask(BitMask32.allOff())
         self.collect_col_np = self.pivot.attachNewNode(collect_col)
 
+        # Sphere menor exclusiva para poças — evita falsos positivos.
+        # Raio 0.4 + raio da poça 0.7 = distância de contato 1.1 unidades,
+        # dentro do disco visual interno da poça.
+        obstacle_col = CollisionNode("player_obstacle_sphere")
+        obstacle_col.addSolid(CollisionSphere(0, 0, 0, 0.4))
+        obstacle_col.setFromCollideMask(Scene.OBSTACLE_COLLIDE_MASK)
+        obstacle_col.setIntoCollideMask(BitMask32.allOff())
+        self.obstacle_col_np = self.pivot.attachNewNode(obstacle_col)
+
         base.cTrav.addCollider(self.tree_col_np, pusher)
         pusher.addCollider(self.tree_col_np, self.pivot)
         base.cTrav.addCollider(self.collect_col_np, base.collision_handler)
+        base.cTrav.addCollider(self.obstacle_col_np, base.collision_handler)
 
         # ── Teclas ───────────────────────────────────────────────────────
         self._keys = {
