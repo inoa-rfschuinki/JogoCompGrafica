@@ -174,7 +174,7 @@ class Menu:
         self._create_menu_button(
             text="JOGAR",
             icon=FA_PLAY,
-            pos=(0, 0, -0.64),
+            pos=(0, 0, -0.60),
             width=0.94,
             height=0.18,
             accent=(0.25, 1.00, 0.16, 1),
@@ -188,7 +188,7 @@ class Menu:
         self._create_menu_button(
             text="SAIR",
             icon=FA_SIGN_OUT,
-            pos=(0, 0, -0.85),
+            pos=(0, 0, -0.79),
             width=0.72,
             height=0.14,
             accent=(1.00, 0.22, 0.16, 1),
@@ -202,7 +202,7 @@ class Menu:
 
         # ── Resultado da última partida ──────────────────────────────────────
         self._result_text = OnscreenText(
-            text="", pos=(0, -1.03), scale=0.048,
+            text="", pos=(0, -0.945), scale=0.042,
             fg=(0.60, 1.0, 0.60, 1), shadow=(0, 0, 0, 0.6),
             align=TextNode.ACenter,
             font=_ui_font, mayChange=True, parent=self._frame,

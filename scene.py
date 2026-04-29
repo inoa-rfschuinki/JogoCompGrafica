@@ -17,6 +17,7 @@ from panda3d.core import (
     NodePath, Vec4, Vec3, Material,
     AmbientLight,
     CollisionNode, CollisionBox, Point3, BitMask32,
+    Texture,
 )
 
 
@@ -57,6 +58,150 @@ def _make_plane(width: float, depth: float, divs: int = 1) -> Geom:
     return geom
 
 
+def _make_textured_plane(width: float, depth: float, divs: int = 1, uv_repeat: float = 1.0) -> Geom:
+    """Plano XY centrado na origem com coordenadas UV repetidas."""
+    fmt = GeomVertexFormat.getV3n3t2()
+    vdata = GeomVertexData("textured_plane", fmt, Geom.UHStatic)
+
+    n = divs + 1
+    vdata.setNumRows(n * n)
+    vertex = GeomVertexWriter(vdata, "vertex")
+    normal = GeomVertexWriter(vdata, "normal")
+    texcoord = GeomVertexWriter(vdata, "texcoord")
+
+    hw, hd = width / 2, depth / 2
+    for row in range(n):
+        v = row / divs
+        for col in range(n):
+            u = col / divs
+            x = -hw + width * u
+            y = -hd + depth * v
+            vertex.addData3(x, y, 0)
+            normal.addData3(0, 0, 1)
+            texcoord.addData2(u * uv_repeat, v * uv_repeat)
+
+    tris = GeomTriangles(Geom.UHStatic)
+    for row in range(divs):
+        for col in range(divs):
+            a = row * n + col
+            b = a + 1
+            c = a + n
+            d = c + 1
+            tris.addVertices(a, b, c)
+            tris.addVertices(b, d, c)
+
+    geom = Geom(vdata)
+    geom.addPrimitive(tris)
+    return geom
+
+
+def _configure_repeating_texture(tex: Texture) -> Texture:
+    tex.setWrapU(Texture.WMRepeat)
+    tex.setWrapV(Texture.WMRepeat)
+    tex.setMinfilter(Texture.FTLinearMipmapLinear)
+    tex.setMagfilter(Texture.FTLinear)
+    return tex
+
+
+def _make_stone_texture(seed: int = 42) -> Texture:
+    """Textura de pedra procedural: escala de cinza com veias e grão."""
+    size = 128
+    rng = random.Random(seed)
+    data = bytearray()
+    for y in range(size):
+        for x in range(size):
+            base = rng.randint(112, 158)
+            vein = int(abs(math.sin(x * 0.31 + y * 0.17) *
+                           math.cos(x * 0.11 - y * 0.27)) * 40)
+            grain = rng.randint(-22, 22)
+            lf = int(math.sin(x * 0.055) * math.cos(y * 0.07) * 22)
+            v = max(70, min(212, base - vein + grain + lf))
+            data.extend((v, int(v * 0.96), int(v * 0.92), 255))
+    tex = Texture("proc_stone")
+    tex.setup2dTexture(size, size, Texture.TUnsignedByte, Texture.FRgba8)
+    tex.setRamImage(bytes(data))
+    tex.setWrapU(Texture.WMRepeat)
+    tex.setWrapV(Texture.WMRepeat)
+    tex.setMinfilter(Texture.FTLinearMipmapLinear)
+    tex.setMagfilter(Texture.FTLinear)
+    return tex
+
+
+def _make_grass_texture() -> Texture:
+    """Textura grass_tile em memoria; evita depender de arquivos externos."""
+    size = 128
+    rng = random.Random(11)
+    colors = [
+        (26, 82, 20),
+        (45, 128, 30),
+        (66, 162, 42),
+        (82, 190, 48),
+        (18, 60, 16),
+    ]
+    data = bytearray()
+
+    for y in range(size):
+        for x in range(size):
+            color_index = ((x // 5) + (y // 9) + rng.randrange(len(colors))) % len(colors)
+            r, g, b = colors[color_index]
+            blade = int((math.sin(x * 0.75 + y * 0.2) + math.sin(x * 0.12 - y * 0.48)) * 14)
+            stripe = 38 if (x + y * 2) % 19 == 0 or (x * 3 - y) % 31 == 0 else 0
+            noise = rng.randint(-18, 18)
+
+            data.extend((
+                max(0, min(255, r + noise // 3 + stripe // 5)),
+                max(0, min(255, g + noise + blade + stripe)),
+                max(0, min(255, b + noise // 4)),
+                255,
+            ))
+
+    tex = Texture("procedural_grass_tile")
+    tex.setup2dTexture(size, size, Texture.TUnsignedByte, Texture.FRgba8)
+    tex.setRamImage(bytes(data))
+    return _configure_repeating_texture(tex)
+
+
+def _make_grass_tuft(blades: int = 5) -> Geom:
+    """Pequeno tufo de grama feito com triangulos verticais simples."""
+    fmt = GeomVertexFormat.getV3n3()
+    vdata = GeomVertexData("grass_tuft", fmt, Geom.UHStatic)
+    vdata.setNumRows(blades * 3)
+    vertex = GeomVertexWriter(vdata, "vertex")
+    normal = GeomVertexWriter(vdata, "normal")
+    tris = GeomTriangles(Geom.UHStatic)
+
+    rng = random.Random(blades * 37)
+    for i in range(blades):
+        angle = (math.tau * i / blades) + rng.uniform(-0.18, 0.18)
+        width = rng.uniform(0.10, 0.18)
+        height = rng.uniform(0.55, 0.95)
+        lean = rng.uniform(0.08, 0.18)
+
+        dx = math.cos(angle)
+        dy = math.sin(angle)
+        sx = -dy * width
+        sy = dx * width
+
+        base_x = dx * rng.uniform(0.03, 0.12)
+        base_y = dy * rng.uniform(0.03, 0.12)
+        tip_x = base_x + dx * lean
+        tip_y = base_y + dy * lean
+
+        start = i * 3
+        vertex.addData3(base_x - sx, base_y - sy, 0.02)
+        vertex.addData3(base_x + sx, base_y + sy, 0.02)
+        vertex.addData3(tip_x, tip_y, height)
+
+        for _ in range(3):
+            normal.addData3(-dx, -dy, 0.25)
+
+        tris.addVertices(start, start + 1, start + 2)
+
+    geom = Geom(vdata)
+    geom.addPrimitive(tris)
+    return geom
+
+
 def _make_box(w: float, d: float, h: float) -> Geom:
     """Caixa com normais por face (6 faces × 2 triângulos)."""
     hw, hd, hh = w / 2, d / 2, h / 2
@@ -84,6 +229,74 @@ def _make_box(w: float, d: float, h: float) -> Geom:
         b = f * 4
         tris.addVertices(b, b+1, b+2)
         tris.addVertices(b, b+2, b+3)
+
+    geom = Geom(vdata)
+    geom.addPrimitive(tris)
+    return geom
+
+
+def _make_rock(w: float, d: float, h: float, seed: int = 0) -> Geom:
+    """
+    Rocha procedural: elipsoide deformada com normais flat (facetada).
+    Cada vértice recebe um fator de perturbação aleatório que distorce
+    a superfície de maneira orgânica, e as normais são calculadas por
+    triângulo (flat shading) para dar aparência angulosa de pedra.
+    """
+    rng = random.Random(seed)
+    slices, stacks = 9, 7
+    hw, hd, hh = w / 2, d / 2, h / 2
+
+    # Perturbação radial independente por nó da grade
+    perturb = [[rng.uniform(0.68, 1.25) for _ in range(slices)]
+               for _ in range(stacks + 1)]
+    pole_n = rng.uniform(0.82, 1.08)
+    pole_s = rng.uniform(0.82, 1.08)
+
+    def get_pt(st, sl):
+        sl_w  = sl % slices
+        phi   = math.pi * st / stacks
+        theta = 2 * math.pi * sl_w / slices
+        n = pole_n if st == 0 else (pole_s if st == stacks else perturb[st][sl_w])
+        x = hw * math.sin(phi) * math.cos(theta) * n
+        y = hd * math.sin(phi) * math.sin(theta) * n
+        z = hh * math.cos(phi) * n
+        return (x, y, z, sl_w / slices, st / stacks)
+
+    tri_list = []
+    for sl in range(slices):  # cap norte
+        tri_list.append((get_pt(0, 0), get_pt(1, sl), get_pt(1, sl + 1)))
+    for st in range(1, stacks - 1):
+        for sl in range(slices):
+            p00, p10 = get_pt(st, sl), get_pt(st + 1, sl)
+            p01, p11 = get_pt(st, sl + 1), get_pt(st + 1, sl + 1)
+            tri_list.append((p00, p10, p01))
+            tri_list.append((p01, p10, p11))
+    for sl in range(slices):  # cap sul
+        tri_list.append((get_pt(stacks - 1, sl), get_pt(stacks, 0), get_pt(stacks - 1, sl + 1)))
+
+    fmt   = GeomVertexFormat.getV3n3t2()
+    vdata = GeomVertexData("rock", fmt, Geom.UHStatic)
+    vdata.setNumRows(len(tri_list) * 3)
+    vw = GeomVertexWriter(vdata, "vertex")
+    nw = GeomVertexWriter(vdata, "normal")
+    tw = GeomVertexWriter(vdata, "texcoord")
+    tris = GeomTriangles(Geom.UHStatic)
+
+    for i, (v0, v1, v2) in enumerate(tri_list):
+        ax, ay, az = v1[0]-v0[0], v1[1]-v0[1], v1[2]-v0[2]
+        bx, by, bz = v2[0]-v0[0], v2[1]-v0[1], v2[2]-v0[2]
+        nx = ay*bz - az*by
+        ny = az*bx - ax*bz
+        nz = ax*by - ay*bx
+        ln = math.sqrt(nx*nx + ny*ny + nz*nz)
+        if ln > 1e-9:
+            nx /= ln; ny /= ln; nz /= ln
+        for (vx, vy, vz, vu, vv) in (v0, v1, v2):
+            vw.addData3(vx, vy, vz)
+            nw.addData3(nx, ny, nz)
+            tw.addData2(vu, vv)
+        b = i * 3
+        tris.addVertices(b, b + 1, b + 2)
 
     geom = Geom(vdata)
     geom.addPrimitive(tris)
@@ -227,6 +440,8 @@ class Scene:
 
     MAP_SIZE  = 100   # lado do chão (centrado na origem)
     WALL_H    = 12    # altura das paredes de limite
+    GRASS_UV_REPEAT = 64
+    GRASS_TUFT_COUNT = 95
     TREE_COLLIDE_MASK        = BitMask32.bit(1)
     COLLECTIBLE_COLLIDE_MASK = BitMask32.bit(2)
     OBSTACLE_COLLIDE_MASK    = BitMask32.bit(3)
@@ -238,6 +453,7 @@ class Scene:
         random.seed(42)   # cena determinista
 
         self._build_ground()
+        self._build_grass_tufts()
         self._build_boundary_walls()
         self._build_decorations()
         self._build_rocks()
@@ -265,6 +481,24 @@ class Scene:
             shininess=4
         )
 
+        grass_geom = _make_textured_plane(
+            self.MAP_SIZE,
+            self.MAP_SIZE,
+            divs=32,
+            uv_repeat=self.GRASS_UV_REPEAT
+        )
+        grass_np = _attach_geom(self.root, grass_geom, "grass_surface")
+        grass_np.setPos(0, 0, 0.02)
+        grass_np.setTwoSided(True)
+        grass_np.setTexture(_make_grass_texture(), 1)
+        _set_material(
+            grass_np,
+            diffuse=Vec4(1.0, 1.0, 1.0, 1),
+            ambient_factor=0.7,
+            specular=Vec4(0.02, 0.04, 0.02, 1),
+            shininess=2
+        )
+
         # Camada de sub-solo visível nas bordas (terra escura)
         sub_geom = _make_box(self.MAP_SIZE + 2, self.MAP_SIZE + 2, d * 0.5)
         sub_np   = _attach_geom(self.root, sub_geom, "subsoil")
@@ -284,6 +518,39 @@ class Scene:
         _set_material(py_np, Vec4(0.55, 0.42, 0.28, 1), ambient_factor=0.35, shininess=3)
 
     # ── Paredes limite ────────────────────────────────────────────────────
+    def _build_grass_tufts(self):
+        """Tufos discretos de grama, concentrados fora dos caminhos."""
+        rng = random.Random(93)
+        half = self.MAP_SIZE / 2 - 5
+
+        for i in range(self.GRASS_TUFT_COUNT):
+            for _ in range(80):
+                x = rng.uniform(-half, half)
+                y = rng.uniform(-half, half)
+                on_path = abs(x) < 3.2 or abs(y) < 3.2
+                too_close_to_center = abs(x) < 8 and abs(y) < 8
+                if not on_path and not too_close_to_center:
+                    break
+
+            blades = rng.randint(4, 7)
+            tuft_np = _attach_geom(self.root, _make_grass_tuft(blades), f"grass_tuft_{i}")
+            tuft_np.setPos(x, y, 0.02)
+            tuft_np.setH(rng.uniform(0, 360))
+            tuft_np.setScale(rng.uniform(0.6, 2.8))
+            tuft_np.setTwoSided(True)
+            _set_material(
+                tuft_np,
+                Vec4(
+                    rng.uniform(0.20, 0.34),
+                    rng.uniform(0.48, 0.70),
+                    rng.uniform(0.10, 0.18),
+                    1
+                ),
+                ambient_factor=0.45,
+                specular=Vec4(0.02, 0.04, 0.02, 1),
+                shininess=2
+            )
+
     def _build_boundary_walls(self):
         half  = self.MAP_SIZE / 2
         h     = self.WALL_H
@@ -399,26 +666,32 @@ class Scene:
         """Rochas e pedras espalhadas para variar o terreno."""
         rng = random.Random(7)
         rock_configs = [
-            ( 6, -18, 0.3,  1.0, 0.8, 0.5),
-            (-8,  22, 0.25, 0.7, 0.6, 0.4),
-            (27,  12, 0.4,  1.4, 1.0, 0.7),
-            (-24,-20, 0.3,  0.9, 0.7, 0.5),
-            (15, -10, 0.2,  0.6, 0.5, 0.35),
-            (-16, 14, 0.35, 1.2, 0.9, 0.6),
-            (35, -10, 0.3,  1.0, 0.8, 0.5),
-            (-35,  5, 0.25, 0.8, 0.7, 0.45),
-            ( 10, 40, 0.4,  1.3, 1.0, 0.65),
-            (-12,-40, 0.3,  1.0, 0.8, 0.5),
+            # (x,    y,    w,   d,   h)
+            ( 6, -18,  1.8, 1.4, 0.9),   # média
+            (-8,  22,  0.9, 0.7, 0.45),  # pequena
+            (27,  12,  1.6, 1.3, 0.85),  # média-pequena
+            (-24,-20,  1.9, 1.5, 1.0),   # média
+            (15, -10,  0.8, 0.7, 0.45),  # pequena
+            (-16, 14,  1.5, 1.2, 0.8),   # média-pequena
+            (35, -10,  1.7, 1.4, 0.9),   # média
+            (-35,  5,  1.3, 1.0, 0.65),  # média-pequena
+            ( 10, 40,  2.0, 1.6, 1.0),   # média
+            (-12,-40,  1.8, 1.4, 0.9),   # média
+            ( 20, -35, 0.7, 0.6, 0.4),   # pequena
+            (-28,  30, 1.4, 1.1, 0.7),   # média-pequena
+            ( 40,  20, 1.6, 1.2, 0.8),   # média-pequena
+            (-18,  -8, 0.8, 0.7, 0.5),   # pequena
         ]
-        for i, (rx, ry, rz, rw, rd, rh) in enumerate(rock_configs):
-            g  = _make_box(rw, rd, rh)
+        stone_tex = _make_stone_texture()
+        for i, (rx, ry, rw, rd, rh) in enumerate(rock_configs):
+            g  = _make_rock(rw, rd, rh, seed=i * 17 + 3)
             np = _attach_geom(self.root, g, f"rock_{i}")
-            np.setPos(rx, ry, rz)
+            np.setPos(rx, ry, rh / 2)
             np.setH(rng.uniform(0, 360))
-            gray = rng.uniform(0.38, 0.55)
-            _set_material(np, Vec4(gray, gray * 0.97, gray * 0.94, 1),
-                          ambient_factor=0.3,
-                          specular=Vec4(0.15, 0.15, 0.14, 1), shininess=15)
+            np.setTexture(stone_tex, 1)
+            _set_material(np, Vec4(1.0, 1.0, 1.0, 1),
+                          ambient_factor=0.32,
+                          specular=Vec4(0.22, 0.22, 0.20, 1), shininess=22)
 
     # ── Céu (caixa invertida enorme) ──────────────────────────────────────
     def _build_sky(self):
