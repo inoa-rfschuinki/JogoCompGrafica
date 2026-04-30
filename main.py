@@ -16,7 +16,8 @@ from panda3d.core import (
     CollisionTraverser, CollisionHandlerEvent, CollisionHandlerPusher,
     WindowProperties, AntialiasAttrib,
     Fog,
-    Vec4, Vec3
+    Vec4, Vec3,
+    ClockObject,
 )
 from panda3d.core import loadPrcFileData
 import sys
@@ -172,7 +173,7 @@ class Game(ShowBase):
     def _update(self, _task):
         if not self._game_running:
             return Task.done
-        dt = globalClock.getDt()  # builtin injetado pelo Panda3D ShowBase
+        dt = ClockObject.getGlobalClock().getDt()
         self.cTrav.traverse(self.render)
         self.player.update(dt)
         self.collectible_manager.update(dt)
