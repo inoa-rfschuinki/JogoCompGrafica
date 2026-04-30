@@ -31,7 +31,7 @@ from collectibles import CollectibleManager
 from obstacles import ObstacleManager
 from hud import HUD
 from scene import Scene
-from menu import Menu
+from menu import Menu, PauseMenu
 
 
 class Game(ShowBase):
@@ -50,6 +50,8 @@ class Game(ShowBase):
         self._setup_lighting()
 
         self._game_running = False
+        self._paused       = False
+        self._pause_menu   = None
         self.scene = None
         self.player = None
         self.collectible_manager = None
@@ -181,11 +183,15 @@ class Game(ShowBase):
     def _on_collect(self, entry):
         if not self._game_running:
             return
-        collected = self.collectible_manager.collect(entry.getIntoNodePath())
-        if collected:
+        kind = self.collectible_manager.collect(entry.getIntoNodePath())
+        if kind == "normal":
             self.hud.add_score(10)
             if self.collectible_manager.remaining() == 0:
                 self._trigger_victory()
+        elif kind == "time_bonus":
+            # Item especial: -10s no cron\u00f4metro + bonus de pontos.
+            self.hud.add_score(25)
+            self.hud.add_time_bonus(10)
 
     def _on_obstacle_hit(self, entry):
         if not self._game_running:
@@ -226,9 +232,50 @@ class Game(ShowBase):
 
     def _on_escape(self):
         if self._game_running:
-            self._go_to_menu()
+            if self._paused:
+                self._resume_game()
+            else:
+                self._pause_game()
         else:
             self._quit()
+
+    def _pause_game(self):
+        """Congela a partida e exibe o menu de pause."""
+        if not self._game_running or self._paused:
+            return
+        self._paused = True
+        self.taskMgr.remove("update_task")
+        self._free_mouse()
+        if self._pause_menu is None:
+            self._pause_menu = PauseMenu(
+                self,
+                on_resume=self._resume_game,
+                on_restart=self._restart_from_pause,
+                on_menu=self._menu_from_pause,
+            )
+        self._pause_menu.show()
+
+    def _resume_game(self):
+        """Volta a partida do mesmo ponto."""
+        if not self._paused:
+            return
+        self._paused = False
+        if self._pause_menu is not None:
+            self._pause_menu.hide()
+        self._capture_mouse()
+        self.taskMgr.add(self._update, "update_task")
+
+    def _restart_from_pause(self):
+        if self._pause_menu is not None:
+            self._pause_menu.hide()
+        self._paused = False
+        self._start_game()
+
+    def _menu_from_pause(self):
+        if self._pause_menu is not None:
+            self._pause_menu.hide()
+        self._paused = False
+        self._go_to_menu()
 
     def _quit(self):
         self._free_mouse()

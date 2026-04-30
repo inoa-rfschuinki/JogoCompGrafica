@@ -4,7 +4,9 @@ menu.py — Tela de menu principal do jogo.
 
 from direct.gui.OnscreenText import OnscreenText
 from direct.gui.DirectGui import DirectFrame, DirectButton, DGG
-from panda3d.core import TextNode
+from panda3d.core import TextNode, TransparencyAttrib
+
+from ui_art import make_game_artwork
 
 # Font Awesome 6 Solid — code points dos ícones usados
 FA_CROSSHAIRS = ""   # fa-crosshairs
@@ -41,16 +43,67 @@ class Menu:
             pos=(0, 0, 0),
         )
 
-        # ── Painel central (criado antes do texto para ficar atrás) ──────────
+        # Banner panorâmico procedural ocupando TODO o fundo do menu —
+        # gera uma cena estilizada (montanhas + sol + grama + coins).
+        self._artwork_tex = make_game_artwork(width=960, height=576, seed=11)
         DirectFrame(
-            frameColor=(0.12, 0.65, 1.00, 0.42),
-            frameSize=(-0.862, 0.862, -0.402, 0.402),
+            frameColor=(1, 1, 1, 1),
+            frameSize=(-2, 2, -1.2, 1.2),
+            image=self._artwork_tex,
+            image_scale=(2.0, 1, 1.2),
+            pos=(0, 0, 0),
+            parent=self._frame,
+        )
+        # Cortina suave global apenas para legibilidade do texto sobre o
+        # banner. Sem cortina extra ao redor do painel central (evita o
+        # retângulo escuro visível).
+        _scrim = DirectFrame(
+            frameColor=(0.04, 0.06, 0.16, 0.32),
+            frameSize=(-2, 2, -1.2, 1.2),
+            pos=(0, 0, 0),
+            parent=self._frame,
+        )
+        _scrim.setTransparency(TransparencyAttrib.MAlpha)
+
+        # ── Painel central (criado antes do texto para ficar atrás) ──────
+        # Borda externa cyan com leve sombra
+        DirectFrame(
+            frameColor=(0.10, 0.70, 1.00, 0.85),
+            frameSize=(-0.892, 0.892, -0.434, 0.434),
+            pos=(0, 0, 0.0),
+            parent=self._frame,
+        )
+        # Anel intermediário escuro (separa borda da preenchimento)
+        DirectFrame(
+            frameColor=(0.02, 0.05, 0.13, 0.95),
+            frameSize=(-0.882, 0.882, -0.424, 0.424),
+            pos=(0, 0, 0.0),
+            parent=self._frame,
+        )
+        # Borda interna fina cyan
+        DirectFrame(
+            frameColor=(0.20, 0.85, 1.00, 0.55),
+            frameSize=(-0.876, 0.876, -0.418, 0.418),
+            pos=(0, 0, 0.0),
+            parent=self._frame,
+        )
+        # Preenchimento principal (vidro escuro)
+        DirectFrame(
+            frameColor=(0.05, 0.10, 0.24, 0.94),
+            frameSize=(-0.870, 0.870, -0.412, 0.412),
+            pos=(0, 0, 0.0),
+            parent=self._frame,
+        )
+        # Faixa decorativa superior do painel (tira de gradiente cyan).
+        DirectFrame(
+            frameColor=(0.10, 0.65, 1.00, 0.85),
+            frameSize=(-0.870, 0.870, 0.398, 0.412),
             pos=(0, 0, 0.0),
             parent=self._frame,
         )
         DirectFrame(
-            frameColor=(0.04, 0.08, 0.22, 0.94),
-            frameSize=(-0.858, 0.858, -0.398, 0.398),
+            frameColor=(1.00, 0.84, 0.00, 0.90),
+            frameSize=(-0.870, 0.870, -0.412, -0.398),
             pos=(0, 0, 0.0),
             parent=self._frame,
         )
@@ -105,8 +158,8 @@ class Menu:
             font=_ui_font, parent=self._frame,
         )
         OnscreenText(
-            text="Colete todos os 5 objetos espalhados pelo mapa!",
-            pos=(-0.63, 0.215), scale=0.043,
+            text="Colete todos os 10 objetos espalhados pelo mapa!\n(verdes brilhantes dão bônus de tempo)",
+            pos=(-0.63, 0.215), scale=0.038,
             fg=_TEXT, align=TextNode.ALeft,
             font=_ui_font, parent=self._frame,
         )
@@ -340,6 +393,170 @@ class Menu:
         else:
             self._result_text.setText("")
 
+        self._frame.show()
+
+    def hide(self):
+        self._frame.hide()
+
+    def destroy(self):
+        self._frame.destroy()
+
+
+# ════════════════════════════════════════════════════════════════════════
+# PauseMenu — overlay simples acionado com ESC durante a partida.
+# ════════════════════════════════════════════════════════════════════════
+FA_PAUSE   = "\uf04c"  # fa-pause
+FA_REPLAY  = "\uf021"  # fa-arrows-rotate
+FA_HOME    = "\uf015"  # fa-house
+
+
+class PauseMenu:
+    """Painel modal exibido quando o jogador pressiona ESC durante a
+    partida. Pausa o cronômetro (controlado pelo Game) e oferece três
+    opções: continuar, reiniciar ou voltar ao menu principal.
+    """
+
+    def __init__(self, base, on_resume, on_restart, on_menu):
+        self.base       = base
+        self._on_resume = on_resume
+        self._on_restart= on_restart
+        self._on_menu   = on_menu
+
+        try:
+            _ui_font = base.loader.loadFont("/c/Windows/Fonts/arialbd.ttf")
+            _ui_font.setPixelsPerUnit(80)
+        except Exception:
+            _ui_font = None
+        try:
+            _icon_font = base.loader.loadFont("fa-solid-900.ttf")
+            _icon_font.setPixelsPerUnit(80)
+        except Exception:
+            _icon_font = None
+        self._ui_font   = _ui_font
+        self._icon_font = _icon_font
+
+        # Cortina escura sobre toda a tela.
+        self._frame = DirectFrame(
+            frameColor=(0.02, 0.04, 0.10, 0.72),
+            frameSize=(-2, 2, -1.2, 1.2),
+            pos=(0, 0, 0),
+        )
+        self._frame.setTransparency(TransparencyAttrib.MAlpha)
+
+        # Painel central (mesmo estilo do menu principal).
+        DirectFrame(
+            frameColor=(0.10, 0.70, 1.00, 0.85),
+            frameSize=(-0.55, 0.55, -0.50, 0.50),
+            pos=(0, 0, 0), parent=self._frame,
+        )
+        DirectFrame(
+            frameColor=(0.05, 0.10, 0.24, 0.97),
+            frameSize=(-0.540, 0.540, -0.490, 0.490),
+            pos=(0, 0, 0), parent=self._frame,
+        )
+        DirectFrame(
+            frameColor=(0.10, 0.65, 1.00, 0.85),
+            frameSize=(-0.540, 0.540, 0.476, 0.490),
+            pos=(0, 0, 0), parent=self._frame,
+        )
+        DirectFrame(
+            frameColor=(1.00, 0.84, 0.00, 0.90),
+            frameSize=(-0.540, 0.540, -0.490, -0.476),
+            pos=(0, 0, 0), parent=self._frame,
+        )
+
+        # Ícone + título
+        if _icon_font is not None:
+            OnscreenText(
+                text=FA_PAUSE,
+                pos=(-0.18, 0.34), scale=0.085,
+                fg=(0.20, 0.85, 1.00, 1), align=TextNode.ACenter,
+                font=_icon_font, parent=self._frame,
+            )
+        OnscreenText(
+            text="PAUSADO",
+            pos=(0.05, 0.32), scale=0.10,
+            fg=(0.95, 0.97, 1.00, 1),
+            shadow=(0.03, 0.07, 0.25, 0.85), shadowOffset=(0.005, -0.005),
+            align=TextNode.ACenter, font=_ui_font, parent=self._frame,
+        )
+
+        OnscreenText(
+            text="O cronômetro está congelado.",
+            pos=(0, 0.18), scale=0.040,
+            fg=(0.75, 0.82, 0.92, 1), align=TextNode.ACenter,
+            font=_ui_font, parent=self._frame,
+        )
+
+        # Botões
+        self._make_button(
+            text="CONTINUAR", icon=FA_PLAY, pos=(0, 0, 0.02),
+            accent=(0.25, 1.00, 0.16, 1),
+            accent_hot=(0.45, 1.00, 0.34, 1),
+            fill=(0.02, 0.24, 0.04, 0.95),
+            fill_hot=(0.08, 0.58, 0.12, 1.00),
+            command=on_resume,
+        )
+        self._make_button(
+            text="REINICIAR", icon=FA_REPLAY, pos=(0, 0, -0.16),
+            accent=(0.25, 0.70, 1.00, 1),
+            accent_hot=(0.45, 0.85, 1.00, 1),
+            fill=(0.02, 0.10, 0.24, 0.95),
+            fill_hot=(0.08, 0.30, 0.58, 1.00),
+            command=on_restart,
+        )
+        self._make_button(
+            text="MENU PRINCIPAL", icon=FA_HOME, pos=(0, 0, -0.34),
+            accent=(1.00, 0.65, 0.20, 1),
+            accent_hot=(1.00, 0.80, 0.40, 1),
+            fill=(0.22, 0.10, 0.02, 0.95),
+            fill_hot=(0.55, 0.30, 0.08, 1.00),
+            command=on_menu,
+        )
+
+        self._frame.hide()
+
+    def _make_button(self, text, icon, pos, accent, accent_hot,
+                     fill, fill_hot, command):
+        w, h = 0.46, 0.07
+        # Borda externa (accent)
+        outer = DirectFrame(
+            frameColor=accent,
+            frameSize=(-w, w, -h, h),
+            pos=pos, parent=self._frame,
+        )
+        # Botão real (preenchimento)
+        btn = DirectButton(
+            frameColor=(fill, fill_hot, fill_hot, fill),
+            frameSize=(-w + 0.006, w - 0.006, -h + 0.006, h - 0.006),
+            pos=pos,
+            relief=DGG.FLAT,
+            text="",
+            command=command,
+            parent=self._frame,
+            rolloverSound=None,
+            clickSound=None,
+        )
+        btn.setTransparency(TransparencyAttrib.MAlpha)
+        # Ícone à esquerda
+        if self._icon_font is not None:
+            OnscreenText(
+                text=icon,
+                pos=(pos[0] - 0.32, pos[2] - 0.018), scale=0.055,
+                fg=(1, 1, 1, 1), align=TextNode.ACenter,
+                font=self._icon_font, parent=self._frame,
+            )
+        # Texto
+        OnscreenText(
+            text=text,
+            pos=(pos[0] + 0.04, pos[2] - 0.020), scale=0.060,
+            fg=(1, 1, 1, 1),
+            shadow=(0, 0, 0, 0.7), shadowOffset=(0.003, -0.003),
+            align=TextNode.ACenter, font=self._ui_font, parent=self._frame,
+        )
+        return btn
+
+    def show(self):
         self._frame.show()
 
     def hide(self):

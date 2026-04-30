@@ -16,7 +16,7 @@ from panda3d.core import (
     Geom, GeomTriangles, GeomNode,
     NodePath, Vec4, Vec3, Material,
     AmbientLight,
-    CollisionNode, CollisionBox, Point3, BitMask32,
+    CollisionNode, CollisionBox, CollisionCapsule, Point3, BitMask32,
     Texture,
 )
 
@@ -309,6 +309,155 @@ def _attach_geom(parent: NodePath, geom: Geom, name: str) -> NodePath:
     return parent.attachNewNode(node)
 
 
+def _make_sphere(radius: float, slices: int = 18, stacks: int = 12) -> Geom:
+    """
+    Esfera lisa (smooth shading) com normais por vértice.
+    Útil para juntas anatômicas e cabeça do personagem.
+    Pode ser escalada de forma não-uniforme para gerar elipsoides.
+    """
+    fmt   = GeomVertexFormat.getV3n3()
+    vdata = GeomVertexData("sphere", fmt, Geom.UHStatic)
+    n_rows = (stacks + 1) * (slices + 1)
+    vdata.setNumRows(n_rows)
+    vw = GeomVertexWriter(vdata, "vertex")
+    nw = GeomVertexWriter(vdata, "normal")
+
+    for st in range(stacks + 1):
+        phi  = math.pi * st / stacks
+        sphi = math.sin(phi)
+        cphi = math.cos(phi)
+        for sl in range(slices + 1):
+            theta = 2 * math.pi * sl / slices
+            x = sphi * math.cos(theta)
+            y = sphi * math.sin(theta)
+            z = cphi
+            vw.addData3(radius * x, radius * y, radius * z)
+            nw.addData3(x, y, z)
+
+    tris = GeomTriangles(Geom.UHStatic)
+    row = slices + 1
+    for st in range(stacks):
+        for sl in range(slices):
+            a = st * row + sl
+            b = a + 1
+            c = a + row
+            d = c + 1
+            tris.addVertices(a, c, b)
+            tris.addVertices(b, c, d)
+
+    geom = Geom(vdata)
+    geom.addPrimitive(tris)
+    return geom
+
+
+def _make_mountain_peak(base_radius: float,
+                        height: float,
+                        seed: int = 0,
+                        slices: int = 18,
+                        stacks: int = 8,
+                        snow_line: float = 0.62) -> Geom:
+    """
+    Pico de montanha procedural — cone deformado por ruído radial e
+    cristas verticais, com normais flat (faceta rochosa) e cores por
+    vértice fazendo gradiente rocha → neve no topo.
+    """
+    rng = random.Random(seed)
+
+    # Ruído radial por (stack, slice) para silhueta orgânica.
+    noise = [[rng.uniform(0.78, 1.22) for _ in range(slices + 1)]
+             for _ in range(stacks + 1)]
+
+    # Cristas dominantes — cosseno de N lóbulos com fase aleatória.
+    ridge_count = rng.randint(4, 7)
+    ridge_phase = rng.uniform(0, math.tau)
+    for st in range(stacks + 1):
+        z_ratio = st / stacks
+        ridge_amp = 0.28 * (1 - z_ratio)
+        for sl in range(slices + 1):
+            ang = 2 * math.pi * sl / slices
+            ridge = math.cos(ridge_count * ang + ridge_phase)
+            noise[st][sl] *= (1.0 + ridge_amp * ridge)
+
+    # Apex unificado — perfeitamente cônico no topo.
+    for sl in range(slices + 1):
+        noise[stacks][sl] = 0.0
+
+    # Coleta dos vértices da grade (st, sl).
+    pts = [[None] * (slices + 1) for _ in range(stacks + 1)]
+    for st in range(stacks + 1):
+        z_ratio = st / stacks
+        prof = (1 - z_ratio) ** 1.35  # cone côncavo
+        z_base = height * z_ratio
+        for sl in range(slices + 1):
+            ang = 2 * math.pi * sl / slices
+            r   = base_radius * prof * noise[st][sl]
+            zj  = rng.uniform(-0.05, 0.05) * height * (1 - z_ratio)
+            pts[st][sl] = (r * math.cos(ang), r * math.sin(ang), z_base + zj)
+
+    # Triangulação flat-shaded.
+    tri_list = []
+    for st in range(stacks):
+        for sl in range(slices):
+            a = pts[st][sl]
+            b = pts[st][sl + 1]
+            c = pts[st + 1][sl]
+            d = pts[st + 1][sl + 1]
+            tri_list.append((a, c, b))
+            tri_list.append((b, c, d))
+
+    rng2 = random.Random(seed * 3 + 1)
+    rock_dark  = (0.30, 0.27, 0.24)
+    rock_light = (0.56, 0.51, 0.46)
+    snow       = (0.97, 0.97, 1.00)
+
+    def color_for(z):
+        h = max(0.0, min(1.0, z / height))
+        if h < snow_line:
+            t = h / snow_line
+            r = rock_dark[0] * (1 - t) + rock_light[0] * t
+            g = rock_dark[1] * (1 - t) + rock_light[1] * t
+            b = rock_dark[2] * (1 - t) + rock_light[2] * t
+        else:
+            t = min(1.0, (h - snow_line) / max(1e-6, 1 - snow_line) * 1.4)
+            r = rock_light[0] * (1 - t) + snow[0] * t
+            g = rock_light[1] * (1 - t) + snow[1] * t
+            b = rock_light[2] * (1 - t) + snow[2] * t
+        v = rng2.uniform(-0.04, 0.04)
+        return (max(0, min(1, r + v)),
+                max(0, min(1, g + v)),
+                max(0, min(1, b + v)),
+                1.0)
+
+    fmt   = GeomVertexFormat.getV3n3c4()
+    vdata = GeomVertexData("mountain_peak", fmt, Geom.UHStatic)
+    vdata.setNumRows(len(tri_list) * 3)
+    vw = GeomVertexWriter(vdata, "vertex")
+    nw = GeomVertexWriter(vdata, "normal")
+    cw = GeomVertexWriter(vdata, "color")
+    tris = GeomTriangles(Geom.UHStatic)
+
+    for i, (v0, v1, v2) in enumerate(tri_list):
+        ax, ay, az = v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]
+        bx, by, bz = v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]
+        nx = ay * bz - az * by
+        ny = az * bx - ax * bz
+        nz = ax * by - ay * bx
+        ln = math.sqrt(nx * nx + ny * ny + nz * nz)
+        if ln > 1e-9:
+            nx /= ln; ny /= ln; nz /= ln
+        for v in (v0, v1, v2):
+            vw.addData3(*v)
+            nw.addData3(nx, ny, nz)
+            r, g, b, a = color_for(v[2])
+            cw.addData4(r, g, b, a)
+        b = i * 3
+        tris.addVertices(b, b + 1, b + 2)
+
+    geom = Geom(vdata)
+    geom.addPrimitive(tris)
+    return geom
+
+
 def _make_cylinder(radius: float, height: float, slices: int = 12) -> Geom:
     """Cilindro vertical procedural com tampas, normais corretas."""
     fmt   = GeomVertexFormat.getV3n3()
@@ -441,7 +590,10 @@ class Scene:
     MAP_SIZE  = 100   # lado do chão (centrado na origem)
     WALL_H    = 12    # altura das paredes de limite
     GRASS_UV_REPEAT = 64
-    GRASS_TUFT_COUNT = 95
+    GRASS_TUFT_COUNT  = 600
+    GRASS_BLADE_COUNT = 2200   # gramíneas pequenas espalhadas (folhas curtas)
+    PEBBLE_COUNT = 70
+    FLOWER_COUNT = 110
     TREE_COLLIDE_MASK        = BitMask32.bit(1)
     COLLECTIBLE_COLLIDE_MASK = BitMask32.bit(2)
     OBSTACLE_COLLIDE_MASK    = BitMask32.bit(3)
@@ -454,6 +606,9 @@ class Scene:
 
         self._build_ground()
         self._build_grass_tufts()
+        self._build_grass_blades()
+        self._build_flowers()
+        self._build_pebbles()
         self._build_boundary_walls()
         self._build_decorations()
         self._build_rocks()
@@ -469,8 +624,15 @@ class Scene:
         dá sensação de profundidade de solo.
         """
         d = self.GROUND_DEPTH
+        # Estende o piso ALÉM do MAP_SIZE para que ele continue por
+        # baixo da fileira interna de montanhas (que entra ~2m no mapa).
+        # Sem isso, vê-se o "vão" entre a borda da grama e a base dos
+        # picos.
+        GROUND_OVER = 18
+        ground_size = self.MAP_SIZE + GROUND_OVER * 2
+
         # Camada principal — grama clara
-        ground_geom = _make_box(self.MAP_SIZE, self.MAP_SIZE, d)
+        ground_geom = _make_box(ground_size, ground_size, d)
         ground_np   = _attach_geom(self.root, ground_geom, "ground")
         ground_np.setPos(0, 0, -d / 2)
         _set_material(
@@ -482,10 +644,10 @@ class Scene:
         )
 
         grass_geom = _make_textured_plane(
-            self.MAP_SIZE,
-            self.MAP_SIZE,
-            divs=32,
-            uv_repeat=self.GRASS_UV_REPEAT
+            ground_size,
+            ground_size,
+            divs=48,
+            uv_repeat=self.GRASS_UV_REPEAT * (ground_size / self.MAP_SIZE)
         )
         grass_np = _attach_geom(self.root, grass_geom, "grass_surface")
         grass_np.setPos(0, 0, 0.02)
@@ -500,7 +662,7 @@ class Scene:
         )
 
         # Camada de sub-solo visível nas bordas (terra escura)
-        sub_geom = _make_box(self.MAP_SIZE + 2, self.MAP_SIZE + 2, d * 0.5)
+        sub_geom = _make_box(ground_size + 2, ground_size + 2, d * 0.5)
         sub_np   = _attach_geom(self.root, sub_geom, "subsoil")
         sub_np.setPos(0, 0, -d * 0.75 - 0.1)
         _set_material(sub_np, Vec4(0.32, 0.22, 0.12, 1), ambient_factor=0.3, shininess=2)
@@ -551,40 +713,222 @@ class Scene:
                 shininess=2
             )
 
-    def _build_boundary_walls(self):
-        half  = self.MAP_SIZE / 2
-        h     = self.WALL_H
-        thick = 2.0
-        parapet_h = 1.2   # altura do parapeito no topo
+    def _build_grass_blades(self):
+        """Camada extra de gramíneas baixas espalhadas pelo gramado.
+        Cada "gramínea" é um tufinho com 2-3 folhas curtas e finas;
+        elas são muito menores que `_build_grass_tufts` e cobrem até os
+        caminhos para dar a sensação de gramado vivo. Usam um geom
+        compartilhado para não pesar a cena.
+        """
+        rng = random.Random(7777)
+        half = self.MAP_SIZE / 2 - 1
 
-        wall_configs = [
-            # (pos_x, pos_y, pos_z, largura, profundidade, altura)
-            ( 0,  half, h/2,  self.MAP_SIZE + thick*2, thick, h),   # Norte
-            ( 0, -half, h/2,  self.MAP_SIZE + thick*2, thick, h),   # Sul
-            ( half,  0, h/2,  thick, self.MAP_SIZE, h),             # Leste
-            (-half,  0, h/2,  thick, self.MAP_SIZE, h),             # Oeste
+        # Geoms compartilhados — algumas variações para não repetir
+        # exatamente o mesmo formato em todas as instâncias.
+        blade_geoms = [_make_grass_tuft(blades=rng.randint(2, 3))
+                       for _ in range(6)]
+
+        # Nó pai único para reduzir overhead.
+        parent = self.root.attachNewNode("micro_grass")
+
+        for i in range(self.GRASS_BLADE_COUNT):
+            x = rng.uniform(-half, half)
+            y = rng.uniform(-half, half)
+            # Não evita os caminhos: queremos cobertura completa.
+            geom = blade_geoms[i % len(blade_geoms)]
+            np_ = _attach_geom(parent, geom, f"blade_{i}")
+            np_.setPos(x, y, 0.01)
+            np_.setH(rng.uniform(0, 360))
+            # Folhas BEM pequenas (~30% da escala dos tufos).
+            np_.setScale(rng.uniform(0.18, 0.45))
+            np_.setTwoSided(True)
+            _set_material(
+                np_,
+                Vec4(
+                    rng.uniform(0.18, 0.30),
+                    rng.uniform(0.46, 0.72),
+                    rng.uniform(0.10, 0.20),
+                    1,
+                ),
+                ambient_factor=0.55,
+                specular=Vec4(0.02, 0.04, 0.02, 1),
+                shininess=2,
+            )
+
+    def _build_flowers(self):
+        """Pequenas flores procedurais (mini disco colorido + miolo)."""
+        rng = random.Random(2027)
+        half = self.MAP_SIZE / 2 - 6
+
+        # Paleta de pétalas
+        palettes = [
+            (Vec4(1.00, 0.92, 0.30, 1), Vec4(0.95, 0.55, 0.10, 1)),  # margarida
+            (Vec4(0.95, 0.40, 0.55, 1), Vec4(1.00, 0.85, 0.30, 1)),  # rosa
+            (Vec4(0.55, 0.30, 0.85, 1), Vec4(1.00, 0.95, 0.40, 1)),  # violeta
+            (Vec4(0.95, 0.95, 0.95, 1), Vec4(1.00, 0.85, 0.20, 1)),  # branca
+            (Vec4(1.00, 0.55, 0.20, 1), Vec4(0.95, 0.30, 0.10, 1)),  # laranja
         ]
 
-        wall_color = Vec4(0.50, 0.38, 0.25, 1)   # pedra arenito
-        for i, (px, py, pz, w, d, hh) in enumerate(wall_configs):
-            # Corpo principal
-            g  = _make_box(w, d, hh)
-            np = _attach_geom(self.root, g, f"wall_{i}")
-            np.setPos(px, py, pz)
-            _set_material(np, wall_color, ambient_factor=0.3,
-                          specular=Vec4(0.1, 0.08, 0.06, 1), shininess=12)
+        for i in range(self.FLOWER_COUNT):
+            for _ in range(60):
+                x = rng.uniform(-half, half)
+                y = rng.uniform(-half, half)
+                if abs(x) < 3.2 or abs(y) < 3.2:
+                    continue
+                if abs(x) < 7 and abs(y) < 7:
+                    continue
+                break
+            else:
+                continue
 
-            # Faixa escura na base (rodapé)
-            base_g  = _make_box(w, d + 0.2, 0.4)
-            base_np = _attach_geom(self.root, base_g, f"wall_base_{i}")
-            base_np.setPos(px, py, 0.2)
-            _set_material(base_np, Vec4(0.35, 0.26, 0.18, 1), ambient_factor=0.25, shininess=8)
+            petal_color, center_color = rng.choice(palettes)
+            scale = rng.uniform(0.20, 0.40)
+            ang   = rng.uniform(0, 360)
 
-            # Parapeito no topo (ameias)
-            top_g  = _make_box(w, d + 0.3, parapet_h)
-            top_np = _attach_geom(self.root, top_g, f"wall_top_{i}")
-            top_np.setPos(px, py, hh * 2 - parapet_h / 2 + 0.05)
-            _set_material(top_np, Vec4(0.42, 0.32, 0.21, 1), ambient_factor=0.3, shininess=10)
+            # 5–7 pétalas (caixinhas finas dispostas em estrela)
+            n_petals = rng.randint(5, 7)
+            for k in range(n_petals):
+                p_ang = (360 / n_petals) * k
+                petal_g = _make_box(0.18, 0.40, 0.04)
+                pn = _attach_geom(self.root, petal_g, f"petal_{i}_{k}")
+                pn.setPos(x, y, 0.04)
+                pn.setH(ang + p_ang)
+                pn.setScale(scale)
+                _set_material(pn, petal_color, ambient_factor=0.6,
+                              specular=Vec4(0.05, 0.05, 0.05, 1), shininess=4)
+
+            # Miolo (caixinha central)
+            core_g = _make_box(0.18, 0.18, 0.06)
+            cn = _attach_geom(self.root, core_g, f"flower_core_{i}")
+            cn.setPos(x, y, 0.06)
+            cn.setScale(scale)
+            _set_material(cn, center_color, ambient_factor=0.6, shininess=8)
+
+            # Caulezinho curto (apenas para os maiores)
+            if scale > 0.30:
+                stem_g = _make_box(0.04, 0.04, 0.18)
+                sn = _attach_geom(self.root, stem_g, f"flower_stem_{i}")
+                sn.setPos(x, y, 0.09 * scale)
+                sn.setScale(scale)
+                _set_material(sn, Vec4(0.18, 0.55, 0.20, 1),
+                              ambient_factor=0.4, shininess=4)
+
+    def _build_pebbles(self):
+        """Pedrinhas pequenas dispersas pelo terreno (decorativas)."""
+        rng = random.Random(2028)
+        half = self.MAP_SIZE / 2 - 4
+
+        for i in range(self.PEBBLE_COUNT):
+            for _ in range(30):
+                x = rng.uniform(-half, half)
+                y = rng.uniform(-half, half)
+                if abs(x) < 2.5 and abs(y) < 2.5:
+                    continue
+                break
+
+            # Tamanho minúsculo para se assentar no piso
+            w = rng.uniform(0.18, 0.55)
+            d = rng.uniform(0.18, 0.55)
+            h = rng.uniform(0.10, 0.28)
+
+            geom = _make_rock(w, d, h, seed=i * 53 + 11)
+            np = _attach_geom(self.root, geom, f"pebble_{i}")
+            np.setPos(x, y, h * 0.45)
+            np.setH(rng.uniform(0, 360))
+
+            # Variação de cinza para parecer pedras de verdade
+            shade = rng.uniform(0.42, 0.68)
+            _set_material(
+                np,
+                Vec4(shade, shade * 0.95, shade * 0.88, 1),
+                ambient_factor=0.35,
+                specular=Vec4(0.10, 0.10, 0.10, 1),
+                shininess=10,
+            )
+
+    def _build_boundary_walls(self):
+        """
+        Cordilheira procedural ao redor do mapa.
+          - Fileira interna: picos baixos/médios próximos da arena (escala
+            menor, tons mais escuros — sopés rochosos).
+          - Fileira externa: picos altos com calotas de neve, formando o
+            horizonte da cadeia montanhosa.
+
+        Os picos têm largura sobreposta para que não haja "vão" entre eles
+        e a aparência seja contínua. O bloqueio do jogador continua sendo
+        aplicado pelo clamp ±45 em `Player._handle_movement`.
+        """
+        half = self.MAP_SIZE / 2
+        rng  = random.Random(2026)
+
+        # (offset_externo, faixa_altura, faixa_raio_base, snow_line)
+        # Offset NEGATIVO = a fileira invade o gramado (sopé entra no
+        # mapa). Isso garante continuidade visual sem "vão" entre o piso
+        # e a base das montanhas.
+        rows = [
+            (-2.0,  ( 2.5,  5.0), (2.8, 4.5), 0.99),  # primeiros morros invadindo a grama
+            ( 2.0,  ( 5.0,  9.0), (3.6, 5.4), 0.88),  # sopé com pouca neve
+            ( 7.0,  ( 9.5, 15.0), (4.6, 7.0), 0.68),  # meio nevado
+            (13.5,  (14.0, 23.0), (5.5, 8.8), 0.50),  # cume principal
+            (21.0,  (21.0, 31.0), (6.5,10.0), 0.40),  # picos majestosos ao fundo
+        ]
+
+        peak_index = 0
+
+        def place_side(axis: str, sign: int):
+            """
+            axis = 'x' → cordilheira corre ao longo do eixo X (lados N/S).
+            axis = 'y' → corre ao longo do eixo Y (lados L/O).
+            sign = ±1  → de qual lado do mapa.
+            """
+            nonlocal peak_index
+            # Estende a faixa um pouco além das bordas para cobrir os cantos.
+            t_start = -half - 18
+            t_end   =  half + 18
+
+            for row_offset, h_range, r_range, snow_line in rows:
+                t = t_start
+                while t < t_end:
+                    base_r = rng.uniform(*r_range)
+                    h      = rng.uniform(*h_range)
+                    jitter = rng.uniform(-1.6, 1.6)
+
+                    if axis == 'x':
+                        x = t + rng.uniform(-1.0, 1.0)
+                        y = sign * (half + row_offset + jitter)
+                    else:
+                        x = sign * (half + row_offset + jitter)
+                        y = t + rng.uniform(-1.0, 1.0)
+
+                    geom = _make_mountain_peak(
+                        base_r, h,
+                        seed=peak_index * 31 + 7,
+                        slices=16, stacks=7,
+                        snow_line=snow_line,
+                    )
+                    np = _attach_geom(self.root, geom,
+                                      f"mountain_peak_{peak_index}")
+                    # Afunda fortemente a base para se fundir com o
+                    # terreno (evita o "vão" visível na junção).
+                    np.setPos(x, y, -1.6)
+                    np.setH(rng.uniform(0, 360))
+                    np.setScale(rng.uniform(0.92, 1.10),
+                                rng.uniform(0.92, 1.10),
+                                rng.uniform(0.95, 1.15))
+                    # Vertex colors são moduladas pelo material; usamos
+                    # diffuse branco para preservar a paleta procedural.
+                    _set_material(np, Vec4(1.0, 1.0, 1.0, 1),
+                                  ambient_factor=0.42,
+                                  specular=Vec4(0.05, 0.05, 0.07, 1),
+                                  shininess=4)
+
+                    # Avança o cursor com sobreposição maior (mais densa).
+                    t += base_r * rng.uniform(0.85, 1.10)
+                    peak_index += 1
+
+        for sign in (+1, -1):
+            place_side('x', sign)
+            place_side('y', sign)
 
     # ── Decorações: árvores simples e plataformas ─────────────────────────
     def _build_decorations(self):
@@ -595,9 +939,15 @@ class Scene:
             (38, 0), (-38, 0), (0, 38), (0,-38),
             (25, 38), (-25, 38), (38, 25), (-38, 25),
             (25,-38), (-25,-38), (38,-25), (-38,-25),
+            # Bosques extras espalhados
+            (12, 24), (-12, 24), (24, 12), (24, -12),
+            (-24, 12), (-24, -12), (12, -24), (-12, -24),
+            (32, 32), (-32, 32), (32, -32), (-32, -32),
+            (5, 18), (-5, 18), (18, 5), (-18, 5),
         ]
+        rng = random.Random(4242)
         for i, (x, y) in enumerate(tree_positions):
-            scale = random.uniform(0.8, 1.4)
+            scale = rng.uniform(0.75, 1.55)
             self._build_tree(x, y, i, scale)
 
         platform_positions = [
@@ -610,37 +960,83 @@ class Scene:
             self._build_platform(x, y, z, i)
 
     def _build_tree(self, x: float, y: float, idx: int, scale: float = 1.0):
-        """Árvore com tronco cilíndrico e copa cônica em 3 camadas."""
-        trunk_h  = 3.5 * scale
-        trunk_r  = 0.28 * scale
+        """Árvore com tronco levemente cônico e copa de aglomerados de
+        esferas (folhagem orgânica), inclinação e variação de cor."""
+        rng = random.Random(idx * 311 + 17)
 
-        # Tronco cilíndrico
-        trunk_geom = _make_cylinder(trunk_r, trunk_h, slices=10)
-        trunk_np   = _attach_geom(self.root, trunk_geom, f"trunk_{idx}")
+        trunk_h = (3.6 + rng.uniform(-0.4, 0.6)) * scale
+        trunk_r = (0.30 + rng.uniform(-0.04, 0.05)) * scale
+
+        # Inclinação aleatória pequena para parecer natural
+        tilt_h = rng.uniform(-4, 4)
+        tilt_p = rng.uniform(-2, 2)
+
+        # Tronco principal — cilindro com leve sombreamento por seção
+        trunk_geom = _make_cylinder(trunk_r, trunk_h, slices=12)
+        trunk_np = _attach_geom(self.root, trunk_geom, f"trunk_{idx}")
         trunk_np.setPos(x, y, trunk_h / 2)
-        _set_material(trunk_np,
-                      Vec4(0.38 + random.uniform(-0.05, 0.05),
-                           0.24 + random.uniform(-0.03, 0.03),
-                           0.10, 1),
-                      ambient_factor=0.25, shininess=4)
+        trunk_np.setH(rng.uniform(0, 360))
+        trunk_np.setHpr(tilt_h, tilt_p, 0)
+        bark_r = 0.36 + rng.uniform(-0.05, 0.06)
+        bark_g = 0.23 + rng.uniform(-0.04, 0.04)
+        _set_material(trunk_np, Vec4(bark_r, bark_g, 0.10, 1),
+                      ambient_factor=0.28,
+                      specular=Vec4(0.05, 0.04, 0.02, 1), shininess=4)
 
-        # Copa — 3 cones empilhados (diminuindo para cima)
-        cone_configs = [
-            # (raio, altura, z_base, cor_verde)
-            (2.0 * scale, 2.8 * scale, trunk_h - 0.3 * scale, Vec4(0.13, 0.55, 0.12, 1)),
-            (1.5 * scale, 2.4 * scale, trunk_h + 1.6 * scale, Vec4(0.16, 0.62, 0.14, 1)),
-            (1.0 * scale, 2.0 * scale, trunk_h + 3.2 * scale, Vec4(0.20, 0.68, 0.17, 1)),
+        # Anel/raiz na base (disco achatado para esconder a junção do
+        # cilindro com o solo).
+        base_geom = _make_cylinder(trunk_r * 1.6, 0.18 * scale, slices=12)
+        base_np = _attach_geom(self.root, base_geom, f"trunk_base_{idx}")
+        base_np.setPos(x, y, 0.09 * scale)
+        _set_material(base_np, Vec4(bark_r * 0.85, bark_g * 0.85, 0.08, 1),
+                      ambient_factor=0.30, shininess=4)
+
+        # Copa: aglomerado de 7-10 esferas dispostas em formato de coroa
+        canopy_center_z = trunk_h + 0.6 * scale
+        canopy_radius = 1.6 * scale
+        leaf_palette = [
+            Vec4(0.10, 0.42, 0.10, 1),
+            Vec4(0.14, 0.55, 0.14, 1),
+            Vec4(0.18, 0.62, 0.16, 1),
+            Vec4(0.22, 0.70, 0.20, 1),
         ]
-        for ci, (cr, ch, cz, ccolor) in enumerate(cone_configs):
-            cone_geom = _make_cone(cr, ch, slices=10)
-            cone_np   = _attach_geom(self.root, cone_geom, f"canopy_{idx}_{ci}")
-            cone_np.setPos(x, y, cz)
-            _set_material(cone_np, ccolor, ambient_factor=0.30,
-                          specular=Vec4(0.05, 0.12, 0.05, 1), shininess=6)
+        n_clusters = rng.randint(8, 12)
+        for c in range(n_clusters):
+            ang = rng.uniform(0, 2 * math.pi)
+            rad = rng.uniform(0.0, canopy_radius)
+            zoff = rng.uniform(-0.6, 1.4) * scale
+            cx_off = math.cos(ang) * rad
+            cy_off = math.sin(ang) * rad
+            r = rng.uniform(0.85, 1.40) * scale
+            geom = _make_sphere(r, slices=12, stacks=8)
+            np_ = _attach_geom(self.root, geom, f"canopy_{idx}_{c}")
+            np_.setPos(x + cx_off, y + cy_off, canopy_center_z + zoff)
+            color = leaf_palette[rng.randint(0, len(leaf_palette) - 1)]
+            _set_material(np_, color,
+                          ambient_factor=0.32,
+                          specular=Vec4(0.08, 0.16, 0.08, 1), shininess=10)
 
-        # Colisor da árvore (tronco + copa)
+        # Esfera central maior para preencher o miolo da copa
+        core_geom = _make_sphere(canopy_radius * 1.05,
+                                 slices=14, stacks=10)
+        core_np = _attach_geom(self.root, core_geom, f"canopy_core_{idx}")
+        core_np.setPos(x, y, canopy_center_z + 0.3 * scale)
+        _set_material(core_np, leaf_palette[1],
+                      ambient_factor=0.35,
+                      specular=Vec4(0.05, 0.10, 0.05, 1), shininess=8)
+
+        # Colisor da árvore — somente o TRONCO (cápsula vertical fina).
+        # A copa não bloqueia o jogador, permitindo passar por baixo dela
+        # sem encostar em uma "parede" invisível.
         col = CollisionNode(f"tree_col_{idx}")
-        col.addSolid(CollisionBox(Point3(0, 0, trunk_h * 0.5 + 1.5 * scale), 1.1 * scale, 1.1 * scale, trunk_h * 0.5 + 1.5 * scale))
+        # CollisionCapsule(ax,ay,az, bx,by,bz, radius) — segmento vertical
+        # do z=0 até o topo do tronco, com raio = trunk_r * 1.15 (folga
+        # mínima para o tronco não atravessar visualmente o jogador).
+        col.addSolid(CollisionCapsule(
+            0, 0, 0.1,
+            0, 0, trunk_h,
+            trunk_r * 1.15,
+        ))
         col.setFromCollideMask(BitMask32.allOff())
         col.setIntoCollideMask(self.TREE_COLLIDE_MASK)
         col_np = self.root.attachNewNode(col)

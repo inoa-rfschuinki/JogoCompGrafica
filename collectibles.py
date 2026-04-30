@@ -224,9 +224,11 @@ class Collectible:
 
     def __init__(self, parent: NodePath, position: Vec3,
                  shape: str = "sphere", color: Vec4 = None,
-                 cTrav=None, collision_handler=None, index: int = 0):
+                 cTrav=None, collision_handler=None, index: int = 0,
+                 kind: str = "normal"):
 
         self.alive = True
+        self.kind  = kind
         self._base_z = position.z
         self._bob_phase = random.uniform(0, 2 * math.pi)
         self._rot_angle = random.uniform(0, 360)
@@ -278,6 +280,38 @@ class Collectible:
         self.col_np = self.root.attachNewNode(col_node)
         # Tag com índice único — lido via getTag() no evento de colisão
         self.col_np.setTag('cid', str(index))
+        self.col_np.setTag('kind', kind)
+
+        # Aura extra para o coletavel especial (bônus de tempo) — dois
+        # anéis adicionais maiores em planos perpendiculares e tom verde
+        # brilhante para destacar como item raro/opcional.
+        self._extra_rings = []
+        if kind == "time_bonus":
+            self._build_special_aura()
+
+    # ────────────────────────────────────────────────────────────────────────
+    def _build_special_aura(self):
+        """Anéis decorativos extras para destacar o item especial."""
+        for ang_p, ang_r, scale, alpha in (
+            (90, 0,  1.30, 0.85),
+            (0, 90,  1.55, 0.75),
+            (45, 45, 1.80, 0.55),
+        ):
+            rg = _make_ring_geom(radius=0.70, tube_r=0.05)
+            rn = GeomNode(f"special_ring_{id(self)}_{ang_p}")
+            rn.addGeom(rg)
+            rnp = self.root.attachNewNode(rn)
+            rnp.setScale(scale)
+            rnp.setP(ang_p)
+            rnp.setR(ang_r)
+            mat = Material()
+            mat.setEmission(Vec4(0.60, 1.00, 0.55, 1))
+            mat.setDiffuse(Vec4(0.50, 1.00, 0.55, alpha))
+            mat.setAmbient(Vec4(0.35, 0.85, 0.40, 1))
+            mat.setSpecular(Vec4(1.0, 1.0, 1.0, 1))
+            mat.setShininess(180)
+            rnp.setMaterial(mat, 1)
+            self._extra_rings.append(rnp)
 
     # ────────────────────────────────────────────────────────────────────────
     def update(self, dt: float, elapsed: float):
@@ -292,6 +326,15 @@ class Collectible:
         # Anel girando na direção oposta e em eixo diferente
         self.ring_np.setP(self._rot_angle * 0.7)
         self.ring_np.setR(self._rot_angle * 0.4)
+
+        # Anéis extras (item especial) giram cada um em ritmo diferente
+        # e pulsam de tamanho para chamar atenção.
+        if self._extra_rings:
+            pulse = 1.0 + 0.10 * math.sin(elapsed * 3.5)
+            for k, rnp in enumerate(self._extra_rings):
+                rnp.setH((self._rot_angle * (1.4 + 0.3 * k)) % 360)
+                base_scale = 1.30 + 0.25 * k
+                rnp.setScale(base_scale * pulse)
 
         # Bob senoidal
         bob = math.sin(elapsed * self.BOB_SPEED + self._bob_phase)
@@ -320,10 +363,16 @@ class CollectibleManager:
     Cria, armazena e atualiza todos os coletáveis do nível.
     """
 
-    # Posições fixas espalhadas pelo mapa (x, y) — 5 itens
+    # Posições fixas espalhadas pelo mapa (x, y) — coletaveis obrigatórios
     SPAWN_POSITIONS = [
-        ( 10,  10), (-10, -10),
-        ( 20,   0), (  0,  20), (-15,  25),
+        ( 10,  10), (-10, -10), ( 20,   0), (  0,  20), (-15,  25),
+        ( 28, -22), (-30,  18), (  6, -32), ( 32,  14), (-22, -28),
+    ]
+
+    # Posições do coletavel especial (bônus de -10s) — OPCIONAIS:
+    # não contam para a vitória, mas reduzem o tempo final.
+    BONUS_POSITIONS = [
+        ( 18, -14), (-26,   8), ( 36, -32), (-38,  36),
     ]
 
     def __init__(self, render, loader, cTrav, collision_handler):
@@ -353,32 +402,54 @@ class CollectibleManager:
                 cTrav=self._cTrav,
                 collision_handler=self._handler,
                 index=i,
+                kind="normal",
             )
-            # Chaveado pela tag 'cid' — string do índice
             self._items[str(i)] = item
+
+        # Coletaveis especiais (bônus de tempo). Índices após os normais.
+        bonus_color = Vec4(0.45, 1.00, 0.55, 1)   # verde brilhante
+        offset = len(self.SPAWN_POSITIONS)
+        for j, (x, y) in enumerate(self.BONUS_POSITIONS):
+            idx = offset + j
+            pos = Vec3(x, y, 1.4)
+            item = Collectible(
+                parent=self._render,
+                position=pos,
+                shape="octahedron",
+                color=bonus_color,
+                cTrav=self._cTrav,
+                collision_handler=self._handler,
+                index=idx,
+                kind="time_bonus",
+            )
+            self._items[str(idx)] = item
 
     def update(self, dt: float):
         self._elapsed += dt
         for item in self._items.values():
             item.update(dt, self._elapsed)
 
-    def collect(self, into_np: NodePath) -> bool:
+    def collect(self, into_np: NodePath) -> str:
         """
         Tenta coletar o item associado ao NodePath de colisão.
-        Usa a tag 'cid' gravada no nó para identificar o item.
-        Retorna True se coletou com sucesso.
+        Retorna a string `kind` do item ("normal" ou "time_bonus")
+        em caso de sucesso, ou string vazia se nada foi coletado.
         """
         cid = into_np.getTag('cid')
         if cid and cid in self._items and self._items[cid].alive:
+            kind = self._items[cid].kind
             self._items[cid].remove()
-            return True
-        return False
+            return kind
+        return ""
 
     def remaining(self) -> int:
-        return sum(1 for item in self._items.values() if item.alive)
+        """Itens obrigatórios restantes (exclui bônus opcionais)."""
+        return sum(1 for it in self._items.values()
+                   if it.alive and it.kind == "normal")
 
     def total(self) -> int:
-        return len(self._items)
+        """Total de itens obrigatórios do nível."""
+        return sum(1 for it in self._items.values() if it.kind == "normal")
 
     def destroy(self):
         """Remove todos os coletaveis vivos da cena."""

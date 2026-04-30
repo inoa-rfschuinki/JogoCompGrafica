@@ -16,7 +16,7 @@ from panda3d.core import (
     Vec4, BitMask32, Material, Point3
 )
 
-from scene import Scene, _make_box, _attach_geom
+from scene import Scene, _make_sphere, _make_cylinder, _attach_geom
 
 
 class Player:
@@ -30,8 +30,10 @@ class Player:
     COLLISION_RADIUS = 1.2
 
     # ── Câmera de órbita ──────────────────────────────────────────────────
-    CAM_DIST      = 5.5    # distância da câmera ao personagem
-    CAM_LOOK_AT_Z = 1.1    # ponto focal no personagem (altura do torso)
+    # Distância aumentada (~+45%) para o personagem ocupar menos tela e
+    # dar mais campo de visão do cenário.
+    CAM_DIST      = 8.0    # distância da câmera ao personagem
+    CAM_LOOK_AT_Z = 1.25   # ponto focal no personagem (altura do torso)
     CAM_PITCH_MIN = -10    # limite superior (câmera quase no nível do chão)
     CAM_PITCH_MAX = 70     # limite inferior (câmera vista de cima)
 
@@ -120,86 +122,250 @@ class Player:
         self.camera.lookAt(Point3(0, 0, self.CAM_LOOK_AT_Z))
 
     # ────────────────────────────────────────────────────────────────────────
-    # Corpo blocky estilo Minecraft (visível em 3ª pessoa)
+    # Corpo anatômico (smooth shading com esferas, elipsoides e cilindros)
     # ────────────────────────────────────────────────────────────────────────
     def _build_body(self):
         """
-        Constrói o corpo articulado do personagem.
+        Constrói um humanoide articulado com primitivas suaves.
+
+        Geometria base — todas as esferas têm raio 1.0 e são escaladas
+        para virar elipsoides (custo de geração ínfimo, melhor reuso).
+        Os cilindros são gerados sob medida (raios pequenos).
 
         Hierarquia de nós (pivot-local):
           pivot
-          ├─ torso, head, hair          (estáticos)
-          ├─ shoulder_l → arm_l, hand_l  (pivotam no ombro para balançar braços)
-          ├─ shoulder_r → arm_r, hand_r
-          ├─ hip_l → leg_l, shoe_l       (pivotam no quadril para caminhar)
-          └─ hip_r → leg_r, shoe_r
+          ├─ pelvis, torso, neck, head, hair  (estáticos)
+          ├─ shoulder_l → upper_arm_l, elbow_l, forearm_l, hand_l
+          ├─ shoulder_r → upper_arm_r, elbow_r, forearm_r, hand_r
+          ├─ hip_l → thigh_l, knee_l, shin_l, foot_l
+          └─ hip_r → thigh_r, knee_r, shin_r, foot_r
 
-        Alturas (em relação ao chão, z=0):
-          shoes  0.00 – 0.12
-          legs   0.12 – 0.84
-          torso  0.84 – 1.54
-          arms   0.84 – 1.54  (mesma faixa do torso)
-          head   1.54 – 1.94
-          hair   1.88 – 2.02
+        Alturas aproximadas (chão = 0):
+          pés      0.00 – 0.10
+          shins    0.10 – 0.55
+          thighs   0.55 – 0.95
+          pelvis   0.85 – 1.05
+          torso    1.05 – 1.55
+          neck     1.55 – 1.65
+          head     1.65 – 1.95
+          hair     1.78 – 2.00
         """
-        def _bmat(diffuse: Vec4, shininess: float = 10) -> Material:
+        def _bmat(diffuse: Vec4, shininess: float = 14,
+                  spec: float = 0.10) -> Material:
             m = Material()
             m.setDiffuse(diffuse)
-            m.setAmbient(Vec4(diffuse[0]*0.35, diffuse[1]*0.35,
-                              diffuse[2]*0.35, 1))
-            m.setSpecular(Vec4(0.12, 0.12, 0.12, 1))
+            m.setAmbient(Vec4(diffuse[0] * 0.40,
+                              diffuse[1] * 0.40,
+                              diffuse[2] * 0.40, 1))
+            m.setSpecular(Vec4(spec, spec, spec, 1))
             m.setShininess(shininess)
             return m
 
-        SKIN  = Vec4(0.90, 0.75, 0.60, 1)
-        SHIRT = Vec4(0.14, 0.32, 0.62, 1)
-        PANTS = Vec4(0.18, 0.22, 0.48, 1)
-        SHOE  = Vec4(0.22, 0.16, 0.10, 1)
-        HAIR  = Vec4(0.30, 0.20, 0.10, 1)
+        SKIN  = Vec4(0.92, 0.76, 0.62, 1)
+        SKIN2 = Vec4(0.86, 0.70, 0.56, 1)   # tom levemente mais escuro p/ mãos/rosto
+        SHIRT = Vec4(0.16, 0.34, 0.64, 1)
+        SHIRT_TRIM = Vec4(0.92, 0.95, 1.00, 1)  # detalhe colarinho/punhos
+        PANTS = Vec4(0.18, 0.22, 0.42, 1)
+        BELT  = Vec4(0.10, 0.07, 0.05, 1)
+        BUCKLE= Vec4(0.95, 0.78, 0.18, 1)
+        SHOE  = Vec4(0.18, 0.12, 0.08, 1)
+        HAIR  = Vec4(0.22, 0.14, 0.08, 1)
 
-        # ── Partes estáticas ──────────────────────────────────────────────
-        np = _attach_geom(self.pivot, _make_box(0.60, 0.35, 0.70), "torso")
-        np.setPos(0, 0, 1.19);  np.setMaterial(_bmat(SHIRT, 10), 1)
+        skin_mat   = _bmat(SKIN,  18, 0.18)
+        skin2_mat  = _bmat(SKIN2, 16, 0.14)
+        shirt_mat  = _bmat(SHIRT, 12, 0.10)
+        trim_mat   = _bmat(SHIRT_TRIM, 14, 0.18)
+        pants_mat  = _bmat(PANTS, 10, 0.08)
+        belt_mat   = _bmat(BELT,  20, 0.20)
+        buckle_mat = _bmat(BUCKLE,80, 0.55)
+        shoe_mat   = _bmat(SHOE,  28, 0.30)
+        hair_mat   = _bmat(HAIR,   8, 0.06)
 
-        np = _attach_geom(self.pivot, _make_box(0.50, 0.50, 0.40), "head")
-        np.setPos(0, 0, 1.74);  np.setMaterial(_bmat(SKIN, 12), 1)
+        # Geometrias compartilhadas (1 vez cada — reusadas por nó).
+        sphere_geom    = _make_sphere(1.0, slices=20, stacks=14)
+        joint_geom     = _make_sphere(1.0, slices=12, stacks=8)
 
-        np = _attach_geom(self.pivot, _make_box(0.54, 0.54, 0.14), "hair")
-        np.setPos(0, 0, 1.95);  np.setMaterial(_bmat(HAIR, 8), 1)
+        def add_ellipsoid(parent, sx, sy, sz, pos, mat, name):
+            n = _attach_geom(parent, sphere_geom, name)
+            n.setScale(sx, sy, sz)
+            n.setPos(*pos)
+            n.setMaterial(mat, 1)
+            return n
 
-        # ── Braços (pivot no ombro, topo do torso z=1.54) ────────────────
-        SHOULDER_Z = 1.54
+        def add_joint(parent, radius, pos, mat, name, flat: float = 0.55):
+            """
+            Esfera achatada que cobre o cap do cilindro do membro.
+            `flat` < 1.0 espreme a junta no eixo Z para evitar bolas
+            grandes nas articulações (cotovelos/joelhos/ombros).
+            """
+            n = _attach_geom(parent, joint_geom, name)
+            n.setScale(radius, radius, radius * flat)
+            n.setPos(*pos)
+            n.setMaterial(mat, 1)
+            return n
 
-        self._shoulder_l = self.pivot.attachNewNode("shoulder_l")
-        self._shoulder_l.setPos(-0.43, 0, SHOULDER_Z)
-        np = _attach_geom(self._shoulder_l, _make_box(0.25, 0.25, 0.70), "arm_l")
-        np.setPos(0, 0, -0.35);   np.setMaterial(_bmat(SHIRT, 10), 1)
-        np = _attach_geom(self._shoulder_l, _make_box(0.25, 0.25, 0.22), "hand_l")
-        np.setPos(0, 0, -0.81);   np.setMaterial(_bmat(SKIN, 12), 1)
+        def add_limb(parent, radius, length, pos, mat, name, slices=12):
+            """Cilindro vertical orientado para baixo (centro no meio do segmento)."""
+            geom = _make_cylinder(radius, length, slices=slices)
+            n = _attach_geom(parent, geom, name)
+            n.setPos(*pos)
+            n.setMaterial(mat, 1)
+            return n
 
-        self._shoulder_r = self.pivot.attachNewNode("shoulder_r")
-        self._shoulder_r.setPos(0.43, 0, SHOULDER_Z)
-        np = _attach_geom(self._shoulder_r, _make_box(0.25, 0.25, 0.70), "arm_r")
-        np.setPos(0, 0, -0.35);   np.setMaterial(_bmat(SHIRT, 10), 1)
-        np = _attach_geom(self._shoulder_r, _make_box(0.25, 0.25, 0.22), "hand_r")
-        np.setPos(0, 0, -0.81);   np.setMaterial(_bmat(SKIN, 12), 1)
+        # ── Pelve / quadril ──────────────────────────────────────────────
+        add_ellipsoid(self.pivot, 0.30, 0.20, 0.16, (0, 0, 0.96), pants_mat, "pelvis")
 
-        # ── Pernas (pivot no quadril, base do torso z=0.84) ──────────────
-        HIP_Z = 0.84
+        # ── Cinto + fivela (separa torso/calça) ─────────────────────────
+        add_ellipsoid(self.pivot, 0.31, 0.21, 0.035, (0, 0, 1.10), belt_mat, "belt")
+        add_ellipsoid(self.pivot, 0.045, 0.022, 0.035, (0, 0.21, 1.10),
+                      buckle_mat, "belt_buckle")
 
-        self._hip_l = self.pivot.attachNewNode("hip_l")
-        self._hip_l.setPos(-0.16, 0, HIP_Z)
-        np = _attach_geom(self._hip_l, _make_box(0.27, 0.27, 0.72), "leg_l")
-        np.setPos(0, 0, -0.36);   np.setMaterial(_bmat(PANTS, 10), 1)
-        np = _attach_geom(self._hip_l, _make_box(0.30, 0.38, 0.12), "shoe_l")
-        np.setPos(0, 0.04, -0.78); np.setMaterial(_bmat(SHOE, 15), 1)
+        # ── Torso (peito mais largo, cintura mais estreita) ─────────────
+        add_ellipsoid(self.pivot, 0.34, 0.20, 0.28, (0, 0, 1.30), shirt_mat, "torso")
+        # Reforço de ombro/costas — esfera achatada no topo do torso.
+        add_ellipsoid(self.pivot, 0.36, 0.18, 0.10, (0, 0, 1.52), shirt_mat, "shoulder_pad")
+        # Colarinho em "V" (detalhe claro à frente do pescoço).
+        add_ellipsoid(self.pivot, 0.10, 0.05, 0.06, (0, 0.16, 1.55),
+                      trim_mat, "collar")
 
-        self._hip_r = self.pivot.attachNewNode("hip_r")
-        self._hip_r.setPos(0.16, 0, HIP_Z)
-        np = _attach_geom(self._hip_r, _make_box(0.27, 0.27, 0.72), "leg_r")
-        np.setPos(0, 0, -0.36);   np.setMaterial(_bmat(PANTS, 10), 1)
-        np = _attach_geom(self._hip_r, _make_box(0.30, 0.38, 0.12), "shoe_r")
-        np.setPos(0, 0.04, -0.78); np.setMaterial(_bmat(SHOE, 15), 1)
+        # ── Pescoço ──────────────────────────────────────────────────────
+        add_limb(self.pivot, 0.07, 0.10, (0, 0, 1.60), skin_mat, "neck", slices=14)
+
+        # ── Cabeça ───────────────────────────────────────────────────────
+        add_ellipsoid(self.pivot, 0.18, 0.20, 0.22, (0, 0, 1.83), skin2_mat, "head")
+
+        # ── Cabelo (calota arredondada cobrindo o topo da cabeça) ───────
+        hair_top = add_ellipsoid(self.pivot, 0.20, 0.22, 0.13,
+                                 (0, -0.01, 1.93), hair_mat, "hair_top")
+        # Franja levemente à frente.
+        add_ellipsoid(self.pivot, 0.18, 0.06, 0.07,
+                      (0, 0.16, 1.86), hair_mat, "hair_bangs")
+        # Laterais do cabelo (cobrem a parte de trás da cabeça/orelhas).
+        add_ellipsoid(self.pivot, 0.20, 0.20, 0.10,
+                      (0, -0.04, 1.80), hair_mat, "hair_back")
+
+        # ── Olhos (esclera branca + pupila escura) ─────────────────
+        EYE_WHITE = Vec4(0.96, 0.96, 0.93, 1)
+        EYE       = Vec4(0.05, 0.05, 0.05, 1)
+        eye_white_mat = _bmat(EYE_WHITE, 30, 0.25)
+        eye_mat   = _bmat(EYE, 50, 0.40)
+        # Esclera (branco do olho)
+        add_ellipsoid(self.pivot, 0.038, 0.020, 0.040,
+                      (-0.07, 0.180, 1.86), eye_white_mat, "eye_w_l")
+        add_ellipsoid(self.pivot, 0.038, 0.020, 0.040,
+                      ( 0.07, 0.180, 1.86), eye_white_mat, "eye_w_r")
+        # Pupila/íris
+        add_ellipsoid(self.pivot, 0.022, 0.022, 0.026,
+                      (-0.07, 0.193, 1.86), eye_mat, "eye_l")
+        add_ellipsoid(self.pivot, 0.022, 0.022, 0.026,
+                      ( 0.07, 0.193, 1.86), eye_mat, "eye_r")
+        # Brilho especular (pequeno ponto branco na pupila)
+        spark_mat = _bmat(Vec4(1, 1, 1, 1), 90, 0.6)
+        add_ellipsoid(self.pivot, 0.008, 0.008, 0.010,
+                      (-0.063, 0.205, 1.872), spark_mat, "spark_l")
+        add_ellipsoid(self.pivot, 0.008, 0.008, 0.010,
+                      ( 0.077, 0.205, 1.872), spark_mat, "spark_r")
+
+        # Sobrancelhas (caixinhas finas escuras)
+        brow_mat = _bmat(Vec4(0.18, 0.10, 0.05, 1), 5, 0.05)
+        for sx in (-0.07, 0.07):
+            n = _attach_geom(self.pivot,
+                             _make_sphere(1.0, slices=10, stacks=6),
+                             f"brow_{sx}")
+            n.setScale(0.045, 0.012, 0.014)
+            n.setPos(sx, 0.190, 1.905)
+            n.setMaterial(brow_mat, 1)
+
+        # Nariz pequeno (esfera achatada, tom de pele mais escuro)
+        add_ellipsoid(self.pivot, 0.022, 0.040, 0.022,
+                      (0, 0.205, 1.825), skin2_mat, "nose")
+
+        # Boca — linha curta (caixinha vermelha bem fina)
+        mouth_mat = _bmat(Vec4(0.65, 0.18, 0.20, 1), 12, 0.10)
+        mouth = _attach_geom(self.pivot,
+                             _make_sphere(1.0, slices=10, stacks=6),
+                             "mouth")
+        mouth.setScale(0.055, 0.018, 0.012)
+        mouth.setPos(0, 0.198, 1.770)
+        mouth.setMaterial(mouth_mat, 1)
+
+        # Orelhas
+        for sx in (-0.18, 0.18):
+            add_ellipsoid(self.pivot, 0.022, 0.045, 0.060,
+                          (sx, 0.02, 1.835), skin2_mat, f"ear_{sx}")
+
+        # ── Braços ───────────────────────────────────────────────────────
+        # Pivot no ombro (topo), para que a rotação P balance todo o membro.
+        SHOULDER_Z = 1.50
+        SHOULDER_X = 0.30
+
+        def build_arm(side_sign, name_suffix):
+            shoulder = self.pivot.attachNewNode(f"shoulder_{name_suffix}")
+            shoulder.setPos(side_sign * SHOULDER_X, 0, SHOULDER_Z)
+
+            # Ombro arredondado (deltóide) — esfera achatada na lateral.
+            add_joint(shoulder, 0.085, (0, 0, 0), shirt_mat,
+                      f"deltoid_{name_suffix}", flat=0.85)
+            # Braço (do ombro até cotovelo, ~0.36 de comprimento).
+            add_limb(shoulder, 0.080, 0.36, (0, 0, -0.18),
+                     shirt_mat, f"upper_arm_{name_suffix}")
+            # Cotovelo — disco fino, mesmo raio do braço.
+            add_joint(shoulder, 0.075, (0, 0, -0.36), skin_mat,
+                      f"elbow_{name_suffix}", flat=0.55)
+            # Antebraço (pele exposta — manga curta).
+            add_limb(shoulder, 0.070, 0.34, (0, 0, -0.53),
+                     skin_mat, f"forearm_{name_suffix}")
+            # Pulso + mão.
+            add_joint(shoulder, 0.065, (0, 0, -0.70), skin_mat,
+                      f"wrist_{name_suffix}", flat=0.55)
+            add_ellipsoid(shoulder, 0.07, 0.05, 0.10,
+                          (0, 0, -0.81), skin2_mat,
+                          f"hand_{name_suffix}")
+            # Polegar (esferinha lateral)
+            add_ellipsoid(shoulder, 0.025, 0.030, 0.040,
+                          (side_sign * 0.05, 0.02, -0.79), skin2_mat,
+                          f"thumb_{name_suffix}")
+            return shoulder
+
+        self._shoulder_l = build_arm(-1, "l")
+        self._shoulder_r = build_arm(+1, "r")
+
+        # ── Pernas ───────────────────────────────────────────────────────
+        HIP_Z = 0.92
+        HIP_X = 0.13
+
+        def build_leg(side_sign, name_suffix):
+            hip = self.pivot.attachNewNode(f"hip_{name_suffix}")
+            hip.setPos(side_sign * HIP_X, 0, HIP_Z)
+
+            # Coxa (cilindro grosso).
+            add_limb(hip, 0.110, 0.42, (0, 0, -0.21),
+                     pants_mat, f"thigh_{name_suffix}")
+            # Joelho — disco fino que apenas suaviza a junta.
+            add_joint(hip, 0.105, (0, 0, -0.42), pants_mat,
+                      f"knee_{name_suffix}", flat=0.55)
+            # Canela.
+            add_limb(hip, 0.095, 0.40, (0, 0, -0.62),
+                     pants_mat, f"shin_{name_suffix}")
+            # Tornozelo + sapato com sola e biqueira distintas
+            add_joint(hip, 0.085, (0, 0, -0.83), shoe_mat,
+                      f"ankle_{name_suffix}", flat=0.50)
+            # Sola larga (achatada)
+            add_ellipsoid(hip, 0.105, 0.21, 0.035,
+                          (0, 0.07, -0.905), shoe_mat,
+                          f"sole_{name_suffix}")
+            # Biqueira arredondada (parte da frente do sapato)
+            add_ellipsoid(hip, 0.090, 0.10, 0.060,
+                          (0, 0.16, -0.880), shoe_mat,
+                          f"toe_{name_suffix}")
+            # Calcanhar levemente saliente
+            add_ellipsoid(hip, 0.085, 0.06, 0.055,
+                          (0, -0.04, -0.880), shoe_mat,
+                          f"heel_{name_suffix}")
+            return hip
+
+        self._hip_l = build_leg(-1, "l")
+        self._hip_r = build_leg(+1, "r")
 
     # ────────────────────────────────────────────────────────────────────────
     # Animação procedural de caminhada

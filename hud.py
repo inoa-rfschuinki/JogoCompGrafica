@@ -4,7 +4,9 @@ hud.py - Interface grafica sobreposta (HUD).
 
 from direct.gui.OnscreenText import OnscreenText
 from direct.gui.DirectGui import DirectFrame, DirectButton, DGG
-from panda3d.core import TextNode
+from panda3d.core import TextNode, TransparencyAttrib
+
+from ui_art import make_victory_artwork
 
 
 FA_PLAY      = "\uf04b"
@@ -29,35 +31,147 @@ class HUD:
         except OSError:
             self._title_font = None
 
-        self._score_text = OnscreenText(
-            text="Pontos: 0",
-            pos=(-1.55, 0.88),
-            scale=0.07,
-            fg=(1, 1, 0.2, 1),
-            shadow=(0, 0, 0, 0.8),
-            shadowOffset=(0.003, 0.003),
+        # ── Card decorativo agrupando os 3 indicadores ─────────────────
+        # Posicionado no canto sup. esquerdo. Coords aspect2d: x[-1.78,1.78]
+        CARD_X0, CARD_X1 = -1.74, -0.78
+        CARD_Y0, CARD_Y1 =  0.55,  0.95
+
+        # Container invisível — facilita destruição em massa
+        self._stats_card = DirectFrame(
+            frameColor=(0, 0, 0, 0),
+            frameSize=(0, 0, 0, 0),
+            pos=(0, 0, 0),
+        )
+        _p = self._stats_card
+
+        # Glow externo
+        DirectFrame(
+            frameColor=(0.10, 0.55, 0.95, 0.18),
+            frameSize=(CARD_X0 - 0.018, CARD_X1 + 0.018,
+                       CARD_Y0 - 0.018, CARD_Y1 + 0.018),
+            parent=_p,
+        )
+        # Borda
+        DirectFrame(
+            frameColor=(0.18, 0.65, 1.00, 0.85),
+            frameSize=(CARD_X0 - 0.006, CARD_X1 + 0.006,
+                       CARD_Y0 - 0.006, CARD_Y1 + 0.006),
+            parent=_p,
+        )
+        # Fundo principal (vidro escuro)
+        DirectFrame(
+            frameColor=(0.04, 0.08, 0.18, 0.86),
+            frameSize=(CARD_X0, CARD_X1, CARD_Y0, CARD_Y1),
+            parent=_p,
+        )
+        # Faixa-cabeçalho
+        DirectFrame(
+            frameColor=(0.10, 0.55, 0.95, 0.92),
+            frameSize=(CARD_X0, CARD_X1, CARD_Y1 - 0.075, CARD_Y1),
+            parent=_p,
+        )
+        OnscreenText(
+            text="STATUS",
+            pos=(CARD_X0 + 0.02, CARD_Y1 - 0.058),
+            scale=0.045,
+            fg=(0.97, 0.99, 1.00, 1),
+            shadow=(0, 0, 0, 0.85),
+            shadowOffset=(0.003, -0.003),
             align=TextNode.ALeft,
+            font=self._title_font,
+            parent=_p,
+        )
+        # Linhas-divisor entre cada indicador
+        for sep_y in (CARD_Y1 - 0.180, CARD_Y1 - 0.290):
+            DirectFrame(
+                frameColor=(0.18, 0.55, 0.92, 0.30),
+                frameSize=(CARD_X0 + 0.025, CARD_X1 - 0.025,
+                           sep_y - 0.0025, sep_y + 0.0025),
+                parent=_p,
+            )
+
+        # Pequenos chips coloridos como "ícones" textuais (independentes
+        # da fonte FA, garantindo que sempre apareçam).
+        def _chip(x, z, color, glyph):
+            DirectFrame(
+                frameColor=(color[0], color[1], color[2], 0.95),
+                frameSize=(-0.034, 0.034, -0.030, 0.030),
+                pos=(x, 0, z),
+                parent=_p,
+            )
+            DirectFrame(
+                frameColor=(0, 0, 0, 0.55),
+                frameSize=(-0.034, 0.034, -0.030, -0.022),
+                pos=(x, 0, z),
+                parent=_p,
+            )
+            OnscreenText(
+                text=glyph,
+                pos=(x, z - 0.018),
+                scale=0.044,
+                fg=(0.04, 0.08, 0.18, 1),
+                align=TextNode.ACenter,
+                font=self._title_font,
+                parent=_p,
+            )
+
+        ICON_X = CARD_X0 + 0.06
+        LABEL_X = CARD_X0 + 0.13
+        VALUE_X = CARD_X1 - 0.04
+
+        ROW1_Z = CARD_Y1 - 0.130
+        ROW2_Z = CARD_Y1 - 0.235
+        ROW3_Z = CARD_Y1 - 0.345
+
+        _chip(ICON_X, ROW1_Z, (1.00, 0.82, 0.18), "$")
+        _chip(ICON_X, ROW2_Z, (0.55, 0.95, 0.55), "*")
+        _chip(ICON_X, ROW3_Z, (0.55, 0.92, 1.00), "T")
+
+        OnscreenText(
+            text="PONTOS", pos=(LABEL_X, ROW1_Z - 0.014), scale=0.038,
+            fg=(0.72, 0.82, 0.95, 1), align=TextNode.ALeft, parent=_p,
+        )
+        OnscreenText(
+            text="ITENS",  pos=(LABEL_X, ROW2_Z - 0.014), scale=0.038,
+            fg=(0.72, 0.82, 0.95, 1), align=TextNode.ALeft, parent=_p,
+        )
+        OnscreenText(
+            text="TEMPO",  pos=(LABEL_X, ROW3_Z - 0.014), scale=0.038,
+            fg=(0.72, 0.82, 0.95, 1), align=TextNode.ALeft, parent=_p,
+        )
+
+        self._score_text = OnscreenText(
+            text="0",
+            pos=(VALUE_X, ROW1_Z - 0.020),
+            scale=0.062,
+            fg=(1.0, 0.92, 0.30, 1),
+            shadow=(0, 0, 0, 0.85), shadowOffset=(0.003, 0.003),
+            align=TextNode.ARight,
+            font=self._title_font,
             mayChange=True,
+            parent=_p,
         )
         self._items_text = OnscreenText(
-            text="Itens: 0 / 0",
-            pos=(-1.55, 0.78),
-            scale=0.06,
-            fg=(0.9, 0.9, 0.9, 1),
-            shadow=(0, 0, 0, 0.8),
-            shadowOffset=(0.003, 0.003),
-            align=TextNode.ALeft,
+            text="0 / 0",
+            pos=(VALUE_X, ROW2_Z - 0.020),
+            scale=0.058,
+            fg=(0.78, 1.00, 0.78, 1),
+            shadow=(0, 0, 0, 0.85), shadowOffset=(0.003, 0.003),
+            align=TextNode.ARight,
+            font=self._title_font,
             mayChange=True,
+            parent=_p,
         )
         self._timer_text = OnscreenText(
-            text="Tempo: 0s",
-            pos=(-1.55, 0.68),
-            scale=0.06,
-            fg=(0.7, 1.0, 1.0, 1),
-            shadow=(0, 0, 0, 0.8),
-            shadowOffset=(0.003, 0.003),
-            align=TextNode.ALeft,
+            text="0.0s",
+            pos=(VALUE_X, ROW3_Z - 0.020),
+            scale=0.058,
+            fg=(0.70, 0.96, 1.00, 1),
+            shadow=(0, 0, 0, 0.85), shadowOffset=(0.003, 0.003),
+            align=TextNode.ARight,
+            font=self._title_font,
             mayChange=True,
+            parent=_p,
         )
         self._crosshair = OnscreenText(
             text="+",
@@ -95,9 +209,9 @@ class HUD:
         remaining = self.base.collectible_manager.remaining()
         collected = total - remaining
 
-        self._score_text.setText(f"Pontos: {self.score}")
-        self._items_text.setText(f"Itens: {collected} / {total}")
-        self._timer_text.setText(f"Tempo: {self.elapsed_time:.1f}s")
+        self._score_text.setText(f"{self.score}")
+        self._items_text.setText(f"{collected} / {total}")
+        self._timer_text.setText(f"{self.elapsed_time:.1f}s")
 
         if self._penalty_timer > 0:
             self._penalty_timer = max(0.0, self._penalty_timer - dt)
@@ -110,12 +224,18 @@ class HUD:
     def add_time_penalty(self, seconds: int):
         self.elapsed_time += seconds
         self._penalty_text.setText(f"+{seconds}s  Pisou na lama!")
+        self._penalty_text["fg"] = (1.0, 0.2, 0.1, 1)
+        self._penalty_timer = 1.8
+
+    def add_time_bonus(self, seconds: int):
+        """Bônus do coletável especial: reduz o tempo decorrido."""
+        self.elapsed_time = max(0.0, self.elapsed_time - seconds)
+        self._penalty_text.setText(f"-{seconds}s  Bonus de tempo!")
+        self._penalty_text["fg"] = (0.30, 1.00, 0.45, 1)
         self._penalty_timer = 1.8
 
     def destroy(self):
-        self._score_text.removeNode()
-        self._items_text.removeNode()
-        self._timer_text.removeNode()
+        self._stats_card.destroy()
         self._crosshair.removeNode()
         self._help_text.removeNode()
         self._penalty_text.removeNode()
@@ -136,10 +256,21 @@ class HUD:
         )
 
         self._create_panel_frame()
+
+        # Banner artwork ilustrado no topo do painel
+        self._victory_art_tex = make_victory_artwork(width=520, height=140, seed=23)
+        DirectFrame(
+            frameColor=(1, 1, 1, 1),
+            frameSize=(-1.00, 1.00, -0.10, 0.10),
+            image=self._victory_art_tex,
+            image_scale=(1.00, 1, 0.10),
+            pos=(0, 0, 0.55),
+            parent=self._victory_frame,
+        )
         OnscreenText(
             text="OBJETIVO CONCLUIDO",
-            pos=(0, 0.40),
-            scale=0.104,
+            pos=(0, 0.32),
+            scale=0.092,
             fg=(1.0, 0.84, 0.00, 1),
             shadow=(0.05, 0.03, 0.00, 1),
             shadowOffset=(0.006, -0.006),
